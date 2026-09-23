@@ -16,12 +16,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
-import { useFarmStore, useUserStore, Farm } from "@/lib/stores/farmStore";
+import { useFarmStore, useUserStore } from "@/lib/stores/farmStore";
 import {
-  Satellite, Droplets, TrendingUp, AlertTriangle, ArrowRight,
-  ShieldCheck, IndianRupee, Thermometer, Calendar, CheckCircle2,
+  Satellite, Droplets, TrendingUp, AlertTriangle,
+  ShieldCheck, Thermometer, Calendar, CheckCircle2,
   ChevronRight, ChevronDown, Sparkles, Brain, Newspaper, Wrench,
-  Calculator, Sprout, Wind, ExternalLink, Leaf
+  Calculator, Sprout, Leaf
 } from "lucide-react";
 
 export default function DashboardPage() {

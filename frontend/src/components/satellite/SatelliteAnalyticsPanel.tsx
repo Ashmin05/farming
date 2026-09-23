@@ -15,7 +15,7 @@ import { useState } from "react";
 import { FarmSatellite } from "@/lib/stores/farmStore";
 import {
   Satellite, Layers, Droplets, AlertTriangle, TrendingUp,
-  ShieldCheck, Eye, Sparkles, CheckCircle2, Info, Compass,
+  CheckCircle2, Info,
   Activity, Calendar
 } from "lucide-react";
 

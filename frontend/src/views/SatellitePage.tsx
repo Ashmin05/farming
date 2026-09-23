@@ -23,7 +23,7 @@ import { useFarmStore, Farm } from "@/lib/stores/farmStore";
 import SatelliteAnalyticsPanel, { SatelliteMapLayer } from "@/components/satellite/SatelliteAnalyticsPanel";
 import {
   MapPin, Leaf, Calendar, Droplets, Satellite, AlertTriangle,
-  ChevronRight, Plus, Layers, Eye, ShieldCheck
+  ChevronRight, Plus
 } from "lucide-react";
 
 // ── Left Panel Farm Card ──────────────────────────────────────────────────────

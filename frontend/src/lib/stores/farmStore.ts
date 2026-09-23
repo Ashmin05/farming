@@ -422,7 +422,9 @@ export function getStoredProfile(): FarmerProfile {
   try {
     const raw = localStorage.getItem(USER_KEY);
     if (raw) return JSON.parse(raw);
-  } catch (e) {}
+  } catch {
+    // localStorage unavailable (private mode, quota) — fall back silently
+  }
   return DEFAULT_PROFILE;
 }
 
@@ -431,7 +433,9 @@ export function saveProfile(profile: FarmerProfile): void {
   try {
     localStorage.setItem(USER_KEY, JSON.stringify(profile));
     window.dispatchEvent(new Event("fasalsetu_user_updated"));
-  } catch (e) {}
+  } catch {
+    // localStorage unavailable (private mode, quota) — fall back silently
+  }
 }
 
 export function useUserStore() {

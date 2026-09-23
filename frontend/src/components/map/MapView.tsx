@@ -50,6 +50,10 @@ function MapViewInner({
   const initialPolygonRef = useRef(initialPolygon);
   const initialCenterRef = useRef(initialCenter);
   const initialZoomRef = useRef(initialZoom);
+  const flyToCenterRef = useRef(flyToCenter);
+  flyToCenterRef.current = flyToCenter;
+
+  const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -62,15 +66,32 @@ function MapViewInner({
     setTokenMissing(false);
     mapboxgl.accessToken = token;
 
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/satellite-streets-v12",
-      center: initialCenterRef.current,
-      zoom: initialZoomRef.current,
-      attributionControl: true,
-    });
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/satellite-streets-v12",
+        center: flyToCenterRef.current ?? initialCenterRef.current,
+        zoom: flyToCenterRef.current ? 14 : initialZoomRef.current,
+        attributionControl: true,
+      });
+    } catch (err) {
+      // Most commonly thrown when WebGL is disabled or unsupported
+      console.error("Mapbox failed to initialise:", err);
+      setMapError("The map could not start. Your browser may have WebGL / hardware acceleration turned off.");
+      return;
+    }
 
     mapRef.current = map;
+
+    map.on("error", (e: { error?: { status?: number; message?: string } }) => {
+      const status = e.error?.status;
+      if (status === 401 || status === 403) {
+        setMapError("Mapbox rejected the access token. Check NEXT_PUBLIC_MAPBOX_TOKEN (and its URL restrictions) in .env.local, then restart the dev server.");
+      } else {
+        console.warn("Mapbox error:", e.error?.message ?? e);
+      }
+    });
 
     // Add navigation control (zoom and rotation)
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
@@ -196,8 +217,9 @@ function MapViewInner({
         } catch {
           // fallback if bbox calculation fails
         }
-      } else {
-        // Only auto-locate on first load if no polygon is set
+      } else if (!flyToCenterRef.current) {
+        // Only auto-locate when the caller gave no polygon or target location —
+        // otherwise GPS would pull the map away from the farm/village being shown
         if (typeof window !== "undefined" && "geolocation" in navigator) {
           try {
             geolocate.trigger();
@@ -274,6 +296,16 @@ function MapViewInner({
           <span>
             <strong>NEXT_PUBLIC_MAPBOX_TOKEN</strong> is not set. Add your public token in <code>.env.local</code> to render satellite tiles.
           </span>
+        </div>
+      )}
+
+      {/* Map Load Error Banner */}
+      {mapError && (
+        <div className="absolute inset-0 z-20 bg-farm-gray flex items-center justify-center p-6">
+          <div className="flex items-start gap-2 max-w-md text-sm text-farm-dark">
+            <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <span>{mapError}</span>
+          </div>
         </div>
       )}
 
@@ -360,7 +392,7 @@ function MapViewInner({
 export const MapView = dynamic(() => Promise.resolve(MapViewInner), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-[500px] bg-farm-gray rounded-2xl flex items-center justify-center text-farm-muted border border-farm-border-color">
+    <div className="w-full h-full min-h-[300px] bg-farm-gray rounded-2xl flex items-center justify-center text-farm-muted border border-farm-border-color">
       <div className="flex flex-col items-center gap-3">
         <div className="w-8 h-8 border-3 border-farm-green border-t-transparent rounded-full animate-spin" />
         <span className="text-sm font-medium">Loading satellite map...</span>

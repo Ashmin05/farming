@@ -21,8 +21,8 @@ import MapView from "@/components/map/MapView";
 import { useFarmStore, Farm, generateFarmWeather } from "@/lib/stores/farmStore";
 import {
   MapPin, ChevronRight, Plus, Leaf, X, CheckCircle2,
-  Edit3, Calendar, Search, Navigation, AlertTriangle,
-  Satellite, IndianRupee, TrendingUp, ShieldCheck
+  Edit3, Calendar, Search, Navigation,
+  Satellite
 } from "lucide-react";
 
 const CROPS = [
@@ -31,6 +31,8 @@ const CROPS = [
 ];
 
 const STEPS = ["Farm Details", "Crop & Soil", "Draw on Map", "Done"];
+
+type SoilLevel = Farm["soil"]["nitrogen"];
 
 const blankForm = {
   name: "", address: "", crop: "", plantingDate: "", area: "",
@@ -165,9 +167,9 @@ function RegisterFarmModal({
       },
       soil: {
         ph: parseFloat(form.soil.ph) || 6.8,
-        nitrogen: (form.soil.nitrogen as any) || "Medium",
-        phosphorus: (form.soil.phosphorus as any) || "Medium",
-        potassium: (form.soil.potassium as any) || "Medium",
+        nitrogen: (form.soil.nitrogen as SoilLevel) || "Medium",
+        phosphorus: (form.soil.phosphorus as SoilLevel) || "Medium",
+        potassium: (form.soil.potassium as SoilLevel) || "Medium",
         organicMatter: form.soil.organicMatter || "2.1%",
         moisturePercent: 30,
         healthRating: "Optimal",
@@ -247,8 +249,9 @@ function RegisterFarmModal({
               <button
                 type="button"
                 onClick={() => searchLocation(searchLocationQuery)}
-                className="absolute right-2 top-2 text-white/60 hover:text-white"
-                title="Search location"
+                disabled={searchSearching}
+                className="absolute right-2 top-2 text-white/60 hover:text-white disabled:opacity-40 disabled:cursor-wait"
+                title={searchSearching ? "Searching…" : "Search location"}
               >
                 <Search className="w-3.5 h-3.5" />
               </button>

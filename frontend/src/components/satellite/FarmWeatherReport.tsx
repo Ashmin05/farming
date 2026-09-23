@@ -15,7 +15,7 @@ import { useState } from "react";
 import {
   Cloud, CloudRain, CloudLightning, Sun, CloudSun, CloudDrizzle,
   Wind, Droplets, Thermometer, AlertTriangle, ShieldAlert,
-  Calendar, CheckCircle2, ChevronRight, Gauge, SunMedium, Compass
+  Calendar, CheckCircle2, Gauge, SunMedium, type LucideIcon
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ function WeatherIcon({ type, className }: { type: string; className?: string }) 
   }
 }
 
-const severityConfig: Record<WeatherSeverity, { bg: string; border: string; text: string; badge: string; icon: any }> = {
+const severityConfig: Record<WeatherSeverity, { bg: string; border: string; text: string; badge: string; icon: LucideIcon }> = {
   critical: {
     bg: "bg-red-50",
     border: "border-red-200",
