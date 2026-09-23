@@ -1,0 +1,53 @@
+# ==============================================================================
+# FasalSetu — Requirements
+# ==============================================================================
+# This file documents all dependencies for the project.
+# For full setup instructions, see README.md
+# ==============================================================================
+
+
+# ── FRONTEND (Node.js / Next.js) ───────────────────────────────────────────────
+# The main application. Install with:
+#
+#   cd frontend
+#   npm install
+#
+# Then start the dev server:
+#
+#   npm run dev
+#
+# Core packages (managed by npm — see frontend/package.json for full list):
+#
+#   next@14.2.35              – React framework (App Router, SSR)
+#   react@^18                 – UI library
+#   typescript@^5             – Static typing
+#   tailwindcss@^3.4.1        – Utility-first CSS
+#   shadcn@^4.21.0            – Accessible UI components
+#   lucide-react@^1.47.0      – Icons
+#   mapbox-gl@^3.31.0         – Interactive satellite maps
+#   @mapbox/mapbox-gl-draw    – Field boundary drawing tools
+#   @turf/turf@^7.4.0         – Geospatial calculations (area, centroid)
+#   @tanstack/react-query     – Server state management and caching
+#
+# Node.js version required: v18.17+ or v20+ (LTS)
+# npm version required:     v9+ or v10+
+
+
+# ── BACKEND (Python / FastAPI) — Future ────────────────────────────────────────
+# The backend service is not yet implemented.
+# These are planned Python dependencies for when it is built.
+# Install with:
+#
+#   python -m venv venv
+#   venv\Scripts\activate        (Windows)
+#   source venv/bin/activate     (Mac / Linux)
+#   pip install -r requirements.txt
+#
+# Python version required: 3.10+
+
+fastapi>=0.110.0          # Web framework for building APIs
+uvicorn[standard]>=0.28.0 # ASGI server to run FastAPI
+pydantic>=2.6.0           # Data validation and settings management
+python-dotenv>=1.0.1      # Load environment variables from .env files
+requests>=2.31.0          # HTTP client for external API calls
+httpx>=0.27.0             # Async HTTP client (for async endpoints)
