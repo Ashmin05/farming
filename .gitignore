@@ -16,6 +16,9 @@ backend/.venv/
 backend/venv/
 *.pyc
 
+# Logs
+*.log
+
 # OS
 .DS_Store
 Thumbs.db

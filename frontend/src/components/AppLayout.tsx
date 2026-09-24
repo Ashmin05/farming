@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { useUserStore } from "@/lib/stores/farmStore";
+import { logout } from "@/lib/auth/auth-client";
 
 const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -80,6 +81,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
           <Link
             href="/login"
+            onClick={logout}
             className="flex items-center gap-2 text-xs text-farm-muted hover:text-red-500 transition-colors"
           >
             <LogOut className="w-3.5 h-3.5" /> Sign out

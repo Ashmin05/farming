@@ -10,11 +10,12 @@
 // ==============================================================================
 
 import Link from "next/link";
-import { Sprout, ArrowRight } from "lucide-react";
+import { Sprout, ArrowRight, AlertCircle } from "lucide-react";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveProfile } from "@/lib/stores/farmStore";
+import { register, login, AuthError } from "@/lib/auth/auth-client";
 
 const languages = [
   { code: "en", label: "English" },
@@ -26,19 +27,31 @@ export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [state, setState] = useState("Maharashtra");
   const [lang, setLang] = useState("en");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    saveProfile({
-      name: name.trim() || "Farmer",
-      phone: phone.trim(),
-      state,
-      preferredLanguage: lang,
-    });
-    router.push("/dashboard");
+    setError(null);
+    setSubmitting(true);
+    try {
+      await register(email.trim(), password, name.trim() || undefined);
+      await login(email.trim(), password);
+      saveProfile({
+        name: name.trim() || "Farmer",
+        phone: phone.trim(),
+        state,
+        preferredLanguage: lang,
+      });
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof AuthError ? err.message : "Something went wrong. Please try again.");
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -91,6 +104,21 @@ export default function RegisterPage() {
                   className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="reg-email">
+                Email
+              </label>
+              <input
+                id="reg-email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green"
+              />
             </div>
 
             <div>
@@ -149,11 +177,19 @@ export default function RegisterPage() {
               />
             </div>
 
+            {error && (
+              <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
             <button
               type="submit"
-              className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 group shadow-sm hover:shadow-md"
+              disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 group shadow-sm hover:shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Create Account
+              {submitting ? "Creating account..." : "Create Account"}
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </form>

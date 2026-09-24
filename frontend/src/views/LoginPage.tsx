@@ -11,7 +11,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Sprout, ArrowRight, Globe } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Sprout, ArrowRight, Globe, AlertCircle } from "lucide-react";
+import { login, AuthError } from "@/lib/auth/auth-client";
 
 const languages = [
   { code: "en", label: "English" },
@@ -20,7 +22,25 @@ const languages = [
 ];
 
 export default function LoginPage() {
+  const router = useRouter();
   const [lang, setLang] = useState("en");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      await login(email.trim(), password);
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof AuthError ? err.message : "Something went wrong. Please try again.");
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-farm-sand flex items-center justify-center p-4" data-theme="light">
@@ -67,23 +87,20 @@ export default function LoginPage() {
                 : "Sign in to your farming dashboard"}
           </p>
 
-          <form action="/dashboard" method="get" className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="phone">
-                Mobile Number
+              <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="email">
+                Email
               </label>
-              <div className="flex">
-                <span className="inline-flex items-center px-3 bg-farm-gray border border-r-0 border-farm-border-color rounded-l-lg text-farm-muted text-sm font-medium">
-                  +91
-                </span>
-                <input
-                  id="phone"
-                  type="tel"
-                  required
-                  placeholder="9876543210"
-                  className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
-                />
-              </div>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
+              />
             </div>
 
             <div>
@@ -94,6 +111,8 @@ export default function LoginPage() {
                 id="password"
                 type="password"
                 required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green"
               />
@@ -109,11 +128,19 @@ export default function LoginPage() {
               </a>
             </div>
 
+            {error && (
+              <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
             <button
               type="submit"
-              className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 group shadow-sm hover:shadow-md"
+              disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 group shadow-sm hover:shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Sign In to Dashboard
+              {submitting ? "Signing in..." : "Sign In to Dashboard"}
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </form>
