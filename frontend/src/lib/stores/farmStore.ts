@@ -14,6 +14,7 @@
 
 import { useState, useEffect } from "react";
 import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
+import { getUserId } from "@/lib/auth/auth-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -344,27 +345,38 @@ export const DEFAULT_FARMS: Farm[] = [
   },
 ];
 
-const STORAGE_KEY = "fasalsetu_farms_v2";
-const USER_KEY = "fasalsetu_user_v2";
+const STORAGE_KEY_BASE = "fasalsetu_farms_v2";
+const USER_KEY_BASE = "fasalsetu_user_v2";
+
+// Namespaces local data by the logged-in user's id, so switching accounts on
+// the same browser never shows one user's farms/profile to another. Signed-out
+// visitors (no account) share a "guest" namespace that carries the demo data —
+// real accounts always start from a clean, empty slate.
+function scopedKey(base: string): string {
+  return `${base}:${getUserId() ?? "guest"}`;
+}
 
 export function getStoredFarms(): Farm[] {
   if (typeof window === "undefined") return DEFAULT_FARMS;
+  const isGuest = getUserId() === null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(scopedKey(STORAGE_KEY_BASE));
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (e) {
     console.error("Error reading farms from localStorage", e);
   }
-  return DEFAULT_FARMS;
+  // First visit for this identity: guests get the demo dataset, real accounts
+  // start empty until they add their own farm.
+  return isGuest ? DEFAULT_FARMS : [];
 }
 
 export function saveFarms(farms: Farm[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(farms));
+    localStorage.setItem(scopedKey(STORAGE_KEY_BASE), JSON.stringify(farms));
     window.dispatchEvent(new Event("fasalsetu_farms_updated"));
   } catch (e) {
     console.error("Error saving farms", e);
@@ -420,7 +432,7 @@ const DEFAULT_PROFILE: FarmerProfile = {
 export function getStoredProfile(): FarmerProfile {
   if (typeof window === "undefined") return DEFAULT_PROFILE;
   try {
-    const raw = localStorage.getItem(USER_KEY);
+    const raw = localStorage.getItem(scopedKey(USER_KEY_BASE));
     if (raw) return JSON.parse(raw);
   } catch {
     // localStorage unavailable (private mode, quota) — fall back silently
@@ -431,7 +443,7 @@ export function getStoredProfile(): FarmerProfile {
 export function saveProfile(profile: FarmerProfile): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(USER_KEY, JSON.stringify(profile));
+    localStorage.setItem(scopedKey(USER_KEY_BASE), JSON.stringify(profile));
     window.dispatchEvent(new Event("fasalsetu_user_updated"));
   } catch {
     // localStorage unavailable (private mode, quota) — fall back silently

@@ -109,6 +109,22 @@ function SatelliteContent() {
 
   const selectedFarm = farms.find((f) => f.id === selectedId) || farms[0];
 
+  if (!selectedFarm) {
+    return (
+      <div className="max-w-6xl mx-auto text-center py-16">
+        <Satellite className="w-10 h-10 text-farm-muted mx-auto mb-3" />
+        <p className="text-farm-dark font-semibold mb-1">No farms yet</p>
+        <p className="text-farm-muted text-sm mb-5">Add your first farm to see satellite analysis.</p>
+        <Link
+          href="/farms"
+          className="inline-flex items-center gap-2 bg-farm-green text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-farm-green-dark transition-colors"
+        >
+          <Plus className="w-4 h-4" /> Add a Farm
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">
       {/* ── Page Header ── */}

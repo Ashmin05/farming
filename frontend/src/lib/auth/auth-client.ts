@@ -79,6 +79,25 @@ export function isAuthenticated(): boolean {
   return getAccessToken() !== null;
 }
 
+/**
+ * Reads the "sub" claim (the user's id) out of the stored access token
+ * without a network call. Used to namespace per-user local data (e.g.
+ * farmStore) so different accounts on the same browser never see each
+ * other's data. Returns null if signed out or the token is malformed.
+ */
+export function getUserId(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[1];
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const claims = JSON.parse(json) as { sub?: string };
+    return claims.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function register(
   email: string,
   password: string,
