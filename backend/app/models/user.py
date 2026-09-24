@@ -12,7 +12,10 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Null for users who only ever signed in via Google.
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Google's stable per-user id ("sub" claim). Null for password-only users.
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

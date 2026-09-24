@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # OAuth client ID from Google Cloud Console — used to verify "Sign in with
+    # Google" ID tokens. Must match the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID.
+    GOOGLE_CLIENT_ID: str | None = None
+
     # External API keys used by app/integrations/
     WEATHER_API_KEY: str | None = None
     SATELLITE_API_KEY: str | None = None

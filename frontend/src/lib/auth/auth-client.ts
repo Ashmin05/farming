@@ -30,6 +30,19 @@ export interface AuthTokens {
 
 export class AuthError extends Error {}
 
+// FastAPI returns `detail` as a plain string for our own HTTPExceptions, but
+// as an array of {msg, loc, ...} objects for pydantic validation errors (422).
+function extractErrorMessage(payload: unknown, status: number): string {
+  const detail = (payload as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
+      .join(" ");
+  }
+  return `Request failed (${status})`;
+}
+
 async function authFetch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_ROOT}${path}`, {
     method: "POST",
@@ -39,7 +52,7 @@ async function authFetch<T>(path: string, body: unknown): Promise<T> {
 
   if (!res.ok) {
     const payload = await res.json().catch(() => null);
-    throw new AuthError(payload?.detail ?? `Request failed (${res.status})`);
+    throw new AuthError(extractErrorMessage(payload, res.status));
   }
 
   return res.json() as Promise<T>;
@@ -80,6 +93,12 @@ export async function register(
 
 export async function login(email: string, password: string): Promise<AuthTokens> {
   const tokens = await authFetch<AuthTokens>("/auth/login", { email, password });
+  storeTokens(tokens);
+  return tokens;
+}
+
+export async function loginWithGoogle(idToken: string): Promise<AuthTokens> {
+  const tokens = await authFetch<AuthTokens>("/auth/google", { id_token: idToken });
   storeTokens(tokens);
   return tokens;
 }

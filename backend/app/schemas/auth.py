@@ -19,6 +19,10 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

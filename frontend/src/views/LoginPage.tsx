@@ -9,11 +9,12 @@
 // multi-language greeting switcher.
 // ==============================================================================
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Sprout, ArrowRight, Globe, AlertCircle } from "lucide-react";
 import { login, AuthError } from "@/lib/auth/auth-client";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
 
 const languages = [
   { code: "en", label: "English" },
@@ -41,6 +42,14 @@ export default function LoginPage() {
       setSubmitting(false);
     }
   }
+
+  const handleGoogleSuccess = useCallback(() => {
+    router.push("/dashboard");
+  }, [router]);
+
+  const handleGoogleError = useCallback((message: string) => {
+    setError(message);
+  }, []);
 
   return (
     <div className="min-h-screen bg-farm-sand flex items-center justify-center p-4" data-theme="light">
@@ -144,6 +153,14 @@ export default function LoginPage() {
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-farm-border-color" />
+            <span className="text-xs text-farm-muted font-medium">OR</span>
+            <div className="flex-1 h-px bg-farm-border-color" />
+          </div>
+
+          <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
         </div>
 
         <p className="text-center text-sm text-farm-muted mt-6">

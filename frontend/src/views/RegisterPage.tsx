@@ -12,10 +12,11 @@
 import Link from "next/link";
 import { Sprout, ArrowRight, AlertCircle } from "lucide-react";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveProfile } from "@/lib/stores/farmStore";
-import { register, login, AuthError } from "@/lib/auth/auth-client";
+import { register, login, getCurrentUser, AuthError } from "@/lib/auth/auth-client";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
 
 const languages = [
   { code: "en", label: "English" },
@@ -53,6 +54,21 @@ export default function RegisterPage() {
       setSubmitting(false);
     }
   }
+
+  const handleGoogleSuccess = useCallback(async () => {
+    const user = await getCurrentUser();
+    saveProfile({
+      name: user?.full_name?.trim() || "Farmer",
+      phone: phone.trim(),
+      state,
+      preferredLanguage: lang,
+    });
+    router.push("/dashboard");
+  }, [router, phone, state, lang]);
+
+  const handleGoogleError = useCallback((message: string) => {
+    setError(message);
+  }, []);
 
   return (
     <div className="min-h-screen bg-farm-sand flex items-center justify-center p-4" data-theme="light">
@@ -170,6 +186,7 @@ export default function RegisterPage() {
                 id="reg-password"
                 type="password"
                 required
+                minLength={8}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Min. 8 characters"
@@ -193,6 +210,14 @@ export default function RegisterPage() {
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-farm-border-color" />
+            <span className="text-xs text-farm-muted font-medium">OR</span>
+            <div className="flex-1 h-px bg-farm-border-color" />
+          </div>
+
+          <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
         </div>
 
         <p className="text-center text-sm text-farm-muted mt-6">

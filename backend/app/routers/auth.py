@@ -6,6 +6,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.auth import (
+    GoogleLoginRequest,
     RefreshTokenRequest,
     TokenResponse,
     UserLogin,
@@ -41,6 +42,17 @@ async def login(
         access_token, refresh_token = await auth_service.login(
             email=payload.email, password=payload.password
         )
+    except AuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/google", response_model=TokenResponse)
+async def google_login(
+    payload: GoogleLoginRequest, auth_service: AuthService = Depends(get_auth_service)
+) -> TokenResponse:
+    try:
+        access_token, refresh_token = await auth_service.login_with_google(payload.id_token)
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)

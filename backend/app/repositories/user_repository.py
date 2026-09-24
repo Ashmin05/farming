@@ -17,11 +17,31 @@ class UserRepository:
         result = await self.session.execute(select(User).where(User.email == email))
         return result.scalar_one_or_none()
 
+    async def get_by_google_sub(self, google_sub: str) -> User | None:
+        result = await self.session.execute(select(User).where(User.google_sub == google_sub))
+        return result.scalar_one_or_none()
+
     async def create(
-        self, *, email: str, hashed_password: str, full_name: str | None = None
+        self,
+        *,
+        email: str,
+        hashed_password: str | None = None,
+        full_name: str | None = None,
+        google_sub: str | None = None,
     ) -> User:
-        user = User(email=email, hashed_password=hashed_password, full_name=full_name)
+        user = User(
+            email=email,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            google_sub=google_sub,
+        )
         self.session.add(user)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def set_google_sub(self, user: User, google_sub: str) -> User:
+        user.google_sub = google_sub
         await self.session.commit()
         await self.session.refresh(user)
         return user

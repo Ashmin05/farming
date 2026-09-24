@@ -19,3 +19,4 @@ asyncpg>=0.29.0           # Async PostgreSQL driver
 alembic>=1.13.1           # Database migrations
 bcrypt>=4.1.2              # Password hashing
 pyjwt>=2.8.0               # JWT access/refresh token encode-decode
+google-auth>=2.29.0        # Verifies "Sign in with Google" ID tokens

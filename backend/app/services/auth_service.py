@@ -9,6 +9,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.integrations.google_auth import GoogleTokenError, verify_google_id_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 
@@ -38,6 +39,33 @@ class AuthService:
         user = await self.user_repository.get_by_email(email)
         if user is None or not verify_password(password, user.hashed_password):
             raise AuthError(INVALID_CREDENTIALS_MESSAGE)
+        if not user.is_active:
+            raise AuthError(INVALID_CREDENTIALS_MESSAGE)
+
+        subject = str(user.id)
+        return create_access_token(subject), create_refresh_token(subject)
+
+    async def login_with_google(self, id_token: str) -> tuple[str, str]:
+        try:
+            profile = verify_google_id_token(id_token)
+        except GoogleTokenError as exc:
+            raise AuthError(str(exc)) from exc
+
+        if not profile.email_verified:
+            raise AuthError("Google account email is not verified.")
+
+        user = await self.user_repository.get_by_google_sub(profile.sub)
+        if user is None:
+            user = await self.user_repository.get_by_email(profile.email)
+            if user is None:
+                user = await self.user_repository.create(
+                    email=profile.email,
+                    full_name=profile.full_name,
+                    google_sub=profile.sub,
+                )
+            elif user.google_sub is None:
+                user = await self.user_repository.set_google_sub(user, profile.sub)
+
         if not user.is_active:
             raise AuthError(INVALID_CREDENTIALS_MESSAGE)
 

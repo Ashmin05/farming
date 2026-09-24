@@ -1,10 +1,16 @@
 import pytest
 
 from app.core.security import decode_token
+from app.integrations.google_auth import GoogleProfile
 from app.services.auth_service import INVALID_CREDENTIALS_MESSAGE, AuthError, AuthService
 
 EMAIL = "farmer@example.com"
 PASSWORD = "correct-horse-battery-staple"
+GOOGLE_SUB = "google-sub-123"
+
+
+def _google_profile(*, email: str = EMAIL, email_verified: bool = True, sub: str = GOOGLE_SUB) -> GoogleProfile:
+    return GoogleProfile(sub=sub, email=email, email_verified=email_verified, full_name="Farmer Jo")
 
 
 async def _register(auth_service: AuthService, *, email: str = EMAIL, password: str = PASSWORD):
@@ -65,6 +71,75 @@ class TestLogin:
             await auth_service.login(email=EMAIL, password=PASSWORD)
 
         assert str(exc.value) == INVALID_CREDENTIALS_MESSAGE
+
+
+class TestLoginWithGoogle:
+    async def test_creates_new_user_on_first_google_login(
+        self, auth_service: AuthService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "app.services.auth_service.verify_google_id_token", lambda token: _google_profile()
+        )
+
+        access_token, _ = await auth_service.login_with_google("fake-id-token")
+
+        user = await auth_service.user_repository.get_by_email(EMAIL)
+        assert user is not None
+        assert user.google_sub == GOOGLE_SUB
+        assert user.hashed_password is None
+        assert decode_token(access_token)["sub"] == str(user.id)
+
+    async def test_links_google_sub_to_existing_password_user(
+        self, auth_service: AuthService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        existing = await _register(auth_service)
+        monkeypatch.setattr(
+            "app.services.auth_service.verify_google_id_token", lambda token: _google_profile()
+        )
+
+        access_token, _ = await auth_service.login_with_google("fake-id-token")
+
+        assert decode_token(access_token)["sub"] == str(existing.id)
+        linked = await auth_service.user_repository.get_by_google_sub(GOOGLE_SUB)
+        assert linked is not None
+        assert linked.id == existing.id
+
+    async def test_reuses_existing_google_user_on_repeat_login(
+        self, auth_service: AuthService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "app.services.auth_service.verify_google_id_token", lambda token: _google_profile()
+        )
+
+        await auth_service.login_with_google("fake-id-token")
+        access_token, _ = await auth_service.login_with_google("fake-id-token")
+
+        user = await auth_service.user_repository.get_by_email(EMAIL)
+        assert decode_token(access_token)["sub"] == str(user.id)
+
+    async def test_rejects_unverified_email(
+        self, auth_service: AuthService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "app.services.auth_service.verify_google_id_token",
+            lambda token: _google_profile(email_verified=False),
+        )
+
+        with pytest.raises(AuthError):
+            await auth_service.login_with_google("fake-id-token")
+
+    async def test_rejects_invalid_token(
+        self, auth_service: AuthService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.integrations.google_auth import GoogleTokenError
+
+        def _raise(token: str) -> GoogleProfile:
+            raise GoogleTokenError("Invalid Google sign-in token.")
+
+        monkeypatch.setattr("app.services.auth_service.verify_google_id_token", _raise)
+
+        with pytest.raises(AuthError):
+            await auth_service.login_with_google("garbage")
 
 
 class TestRefreshToken:
