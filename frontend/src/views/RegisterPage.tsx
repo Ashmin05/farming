@@ -24,6 +24,8 @@ const languages = [
   { code: "hi", label: "हिंदी (Hindi)" },
 ];
 
+const GOOGLE_ENABLED = Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
+
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -211,13 +213,17 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <div className="flex items-center gap-3 my-5">
-            <div className="flex-1 h-px bg-farm-border-color" />
-            <span className="text-xs text-farm-muted font-medium">OR</span>
-            <div className="flex-1 h-px bg-farm-border-color" />
-          </div>
+          {GOOGLE_ENABLED && (
+            <>
+              <div className="flex items-center gap-3 my-5">
+                <div className="flex-1 h-px bg-farm-border-color" />
+                <span className="text-xs text-farm-muted font-medium">OR</span>
+                <div className="flex-1 h-px bg-farm-border-color" />
+              </div>
 
-          <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
+              <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
+            </>
+          )}
         </div>
 
         <p className="text-center text-sm text-farm-muted mt-6">
