@@ -25,9 +25,10 @@ farming/
 │   │   ├── repositories/    # Data-access layer (DB queries)
 │   │   ├── integrations/    # External API clients (weather, satellite, AI, ...)
 │   │   ├── services/        # Business logic, orchestrates repositories/integrations
-│   │   ├── routers/         # FastAPI route definitions (e.g. health.py)
+│   │   ├── routers/         # FastAPI route definitions (health.py, auth.py)
 │   │   └── main.py          # FastAPI app instance, CORS, router registration
-│   └── alembic/             # Async database migrations
+│   ├── alembic/             # Async database migrations
+│   └── tests/               # pytest suite (async, in-memory SQLite)
 ├── .env.example            # ← Environment variable template (start here)
 └── README.md               # This file
 ```
@@ -135,6 +136,41 @@ Backend variables are also in [`.env.example`](.env.example) and go in a `.env` 
 | `DATABASE_URL` | ✅ Yes (backend only) | Async SQLAlchemy connection string, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
 | `FRONTEND_ORIGIN` | No (backend only, default: `http://localhost:3000`) | The one origin allowed by backend CORS |
 | `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | No (backend only) | Keys for external services used in `backend/app/integrations/` |
+| `JWT_SECRET_KEY` | ✅ Yes in any real environment | Signs JWT access/refresh tokens — override the dev default |
+| `JWT_ALGORITHM` | No (default: `HS256`) | JWT signing algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No (default: `30`) | Access token lifetime |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | No (default: `7`) | Refresh token lifetime |
+
+---
+
+## Authentication
+
+JWT-based auth lives in `backend/app/services/auth_service.py`, with routes in `backend/app/routers/auth.py`:
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| POST | `/auth/register` | Create a user (email, password, optional full name) |
+| POST | `/auth/login` | Exchange email/password for an access + refresh token pair |
+| POST | `/auth/refresh` | Exchange a valid refresh token for a new access token |
+| GET | `/auth/me` | Return the current user, resolved from the `Authorization: Bearer <access_token>` header |
+
+Login failures for "no such user" and "wrong password" return the identical `401` message
+(`Invalid email or password.`) so a client can't use the error to enumerate registered emails.
+
+Apply the `users` table migration with:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+Run the backend test suite (async, against an in-memory SQLite DB — no Postgres needed):
+
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ---
 

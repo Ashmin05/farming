@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # Origin of the Next.js frontend — used for the CORS allow-list.
     FRONTEND_ORIGIN: str = "http://localhost:3000"
 
+    # Secret used to sign JWTs. Override with a random value in every real environment.
+    JWT_SECRET_KEY: str = "dev-only-insecure-secret-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
     # External API keys used by app/integrations/
     WEATHER_API_KEY: str | None = None
     SATELLITE_API_KEY: str | None = None
