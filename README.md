@@ -17,7 +17,17 @@ farming/
 │   │   ├── components/     # Shared UI pieces (Navbar, Footer, buttons, etc.)
 │   │   └── lib/            # Hooks, API clients, language settings
 │   └── public/             # Images and static assets
-├── backend/                # Backend service (Python / FastAPI — future)
+├── backend/                # Python / FastAPI backend service
+│   ├── app/
+│   │   ├── core/            # config.py (settings) and database.py (async engine/session)
+│   │   ├── models/          # SQLAlchemy ORM models
+│   │   ├── schemas/         # Pydantic request/response schemas
+│   │   ├── repositories/    # Data-access layer (DB queries)
+│   │   ├── integrations/    # External API clients (weather, satellite, AI, ...)
+│   │   ├── services/        # Business logic, orchestrates repositories/integrations
+│   │   ├── routers/         # FastAPI route definitions (e.g. health.py)
+│   │   └── main.py          # FastAPI app instance, CORS, router registration
+│   └── alembic/             # Async database migrations
 ├── .env.example            # ← Environment variable template (start here)
 └── README.md               # This file
 ```
@@ -112,7 +122,8 @@ Run these from inside the `frontend/` folder:
 
 ## Environment Variables Reference
 
-All environment variables are documented in [`.env.example`](.env.example).
+Frontend variables are documented in [`.env.example`](.env.example) and go in `frontend/.env.local`.
+Backend variables are also in [`.env.example`](.env.example) and go in a `.env` file at the **project root**.
 
 | Variable | Required | Description |
 | :--- | :--- | :--- |
@@ -121,6 +132,9 @@ All environment variables are documented in [`.env.example`](.env.example).
 | `NEXT_PUBLIC_API_URL` | No | Backend API URL if running a real backend |
 | `PORT` | No (backend only) | Port the Python backend runs on |
 | `ENVIRONMENT` | No (backend only) | `development`, `staging`, or `production` |
+| `DATABASE_URL` | ✅ Yes (backend only) | Async SQLAlchemy connection string, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
+| `FRONTEND_ORIGIN` | No (backend only, default: `http://localhost:3000`) | The one origin allowed by backend CORS |
+| `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | No (backend only) | Keys for external services used in `backend/app/integrations/` |
 
 ---
 
@@ -143,10 +157,58 @@ npm install
 
 ---
 
-## Backend (Coming Soon)
+## Backend
 
-The `backend/` folder is prepared for a Python FastAPI service. If you need to run it:
-- Install Python 3.10+
-- Create a virtual environment: `python -m venv venv`
-- Activate it: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (Mac/Linux)
-- Install packages: `pip install -r backend/requirements.txt`
+`backend/` is a FastAPI service with a layered structure:
+
+```
+backend/app/
+├── core/           # config.py (pydantic-settings) and database.py (async engine + session)
+├── models/         # SQLAlchemy ORM models
+├── schemas/        # Pydantic request/response schemas
+├── repositories/   # Data-access layer
+├── integrations/   # External API clients (weather, satellite, AI, ...)
+├── services/       # Business logic
+├── routers/        # FastAPI routes (e.g. GET /health)
+└── main.py         # App instance, CORS, router registration
+```
+
+### Setup
+
+1. Install Python 3.10+
+2. Copy the env template to the project root and fill in `DATABASE_URL` (and any API keys you have):
+   ```bash
+   # from the project root
+   cp .env.example .env        # Mac/Linux
+   Copy-Item .env.example .env # Windows PowerShell
+   ```
+3. Create a virtual environment and install packages:
+   ```bash
+   cd backend
+   python -m venv venv
+   venv\Scripts\activate        # Windows
+   source venv/bin/activate     # Mac/Linux
+   pip install -r requirements.txt
+   ```
+4. Run database migrations:
+   ```bash
+   alembic upgrade head
+   ```
+5. Start the dev server:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+6. Check it's alive: [http://localhost:8000/health](http://localhost:8000/health)
+
+### Adding a database migration
+
+After changing/adding a model in `app/models/`, generate and apply a migration:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
+
+### CORS
+
+`main.py` only allows requests from `FRONTEND_ORIGIN` (default `http://localhost:3000`) — never `*`. Set `FRONTEND_ORIGIN` in `.env` if your frontend runs elsewhere.

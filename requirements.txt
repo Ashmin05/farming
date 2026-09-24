@@ -41,21 +41,28 @@
 # npm version required:     v9+ or v10+
 
 
-# ── BACKEND (Python / FastAPI) — Future ────────────────────────────────────────
-# The backend service is not yet implemented.
-# These are planned Python dependencies for when it is built.
-# Install with:
+# ── BACKEND (Python / FastAPI) ───────────────────────────────────────────────
+# A layered FastAPI service in backend/app/ (models/ schemas/ repositories/
+# integrations/ services/ routers/ core/). Install with:
 #
+#   cd backend
 #   python -m venv venv
 #   venv\Scripts\activate        (Windows)
 #   source venv/bin/activate     (Mac / Linux)
 #   pip install -r requirements.txt
 #
+# Then start the dev server:
+#
+#   uvicorn app.main:app --reload
+#
+# Core packages (see backend/requirements.txt for the authoritative list):
+#
+#   fastapi                       – Web framework
+#   uvicorn[standard]             – ASGI server
+#   pydantic / pydantic-settings  – Data validation and .env-backed settings
+#   sqlalchemy[asyncio]           – Async ORM (backend/app/core/database.py)
+#   asyncpg                       – Async PostgreSQL driver
+#   alembic                       – Async database migrations (backend/alembic/)
+#   httpx / requests              – HTTP clients for external API integrations
+#
 # Python version required: 3.10+
-
-fastapi>=0.110.0          # Web framework for building APIs
-uvicorn[standard]>=0.28.0 # ASGI server to run FastAPI
-pydantic>=2.6.0           # Data validation and settings management
-python-dotenv>=1.0.1      # Load environment variables from .env files
-requests>=2.31.0          # HTTP client for external API calls
-httpx>=0.27.0             # Async HTTP client (for async endpoints)
