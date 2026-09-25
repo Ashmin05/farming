@@ -12,9 +12,11 @@
 // Defaults to exactly 2 consistent farms (Nashik Onion & Pune Wheat).
 // ==============================================================================
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
 import { getUserId } from "@/lib/auth/auth-client";
+import { listFarms, createFarm, deleteFarm, type BackendFarm } from "@/lib/api/farms-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,6 +113,121 @@ export type Farm = {
   weather: FarmDetailedWeather;
   satellite: FarmSatellite;
 };
+
+// The fields a farmer actually fills in when registering a farm — everything
+// else on `Farm` (yield/soil/water/weather/satellite) is generated demo
+// content layered on top (see enrichFarmDraft), since none of those modules
+// have real backend data yet.
+export type FarmDraft = {
+  name: string;
+  address: string;
+  district: string;
+  state: string;
+  crop: string;
+  variety: string;
+  plantingDate: string; // ISO yyyy-mm-dd
+  irrigationMethod?: string | null;
+  center: [number, number]; // [lng, lat]
+  polygonGeoJson: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
+  // Optional real soil report values from the registration wizard's "I have
+  // a Soil Health Card" step — used instead of the generated defaults below
+  // when present. Soil isn't backed by a real service yet, so this is the
+  // one domain module a farmer can enter honestly-known values for.
+  soilOverride?: Partial<Pick<FarmSoil, "ph" | "nitrogen" | "phosphorus" | "organicMatter">>;
+};
+
+// Fills in the demo/mock domain modules (yield, soil, water, weather,
+// satellite) around a real farm's core fields. Used for every farm shown in
+// the app today, guest or signed-in, since none of those modules are backed
+// by a real service yet — only the core fields (this function's `id` and
+// `draft`) come from somewhere real (the backend, for signed-in accounts).
+export function enrichFarmDraft(id: string, draft: FarmDraft, areaAcres: number): Farm {
+  const acres = areaAcres || 2.5;
+  const estQuintals = Math.round(acres * 22);
+  const estPrice = 2400;
+
+  return {
+    id,
+    name: draft.name,
+    address: draft.address,
+    district: draft.district,
+    state: draft.state,
+    crop: draft.crop,
+    variety: draft.variety,
+    plantingDate: draft.plantingDate,
+    areaAcres: acres,
+    center: draft.center,
+    polygonGeoJson: draft.polygonGeoJson,
+    yield: {
+      estimatedQuintals: estQuintals,
+      expectedPricePerQtl: estPrice,
+      totalEstimatedValue: estQuintals * estPrice,
+      harvestWindow: "3–4 months post sowing",
+      historicalYieldComparison: "New field benchmark",
+    },
+    soil: {
+      ph: draft.soilOverride?.ph ?? 6.8,
+      nitrogen: draft.soilOverride?.nitrogen ?? "Medium",
+      phosphorus: draft.soilOverride?.phosphorus ?? "Medium",
+      potassium: "Medium",
+      organicMatter: draft.soilOverride?.organicMatter ?? "2.1%",
+      moisturePercent: 30,
+      healthRating: "Optimal",
+    },
+    water: {
+      status: "Optimal",
+      canopyMoisturePercent: 72,
+      soilMoisturePercent: 30,
+      lastIrrigationDaysAgo: 1,
+      nextRecommendedAction: "Maintain standard crop watering schedule.",
+    },
+    weather: generateFarmWeather(draft.name, draft.address, draft.crop),
+    satellite: {
+      meanNdvi: 0.68,
+      minNdvi: 0.42,
+      maxNdvi: 0.81,
+      ndwi: 0.42,
+      canopyVigourLabel: "Good",
+      healthyCanopyPercent: 80,
+      moderateCanopyPercent: 16,
+      stressedCanopyPercent: 4,
+      history: [
+        { date: "Planting", ndvi: 0.2, benchmark: 0.2, stage: "Sowing" },
+        { date: "Current", ndvi: 0.68, benchmark: 0.65, stage: "Vegetative" },
+      ],
+      stressZones: [],
+      metadata: {
+        satelliteMission: "ESA Sentinel-2B L2A",
+        acquisitionDate: "Recent Overpass",
+        cloudCoveragePercent: 0.3,
+        spatialResolution: "10m Multispectral",
+        dataQualityConfidence: 98.2,
+        sunElevationAngle: "58°",
+      },
+    },
+  };
+}
+
+// Maps a real farm row from the backend into the same enriched Farm shape
+// used everywhere in the UI. area_ha/centroid are server-computed (see
+// backend/app/core/geometry.py) — never trust client-side area math for a
+// farm that's actually persisted.
+function backendFarmToFarm(b: BackendFarm): Farm {
+  const draft: FarmDraft = {
+    name: b.name,
+    address: b.address ?? [b.district, b.state].filter(Boolean).join(", "),
+    district: b.district ?? "",
+    state: b.state ?? "",
+    crop: b.crop,
+    variety: b.variety ?? "",
+    plantingDate: b.sowing_date,
+    irrigationMethod: b.irrigation_method,
+    center: [b.centroid_lng, b.centroid_lat],
+    polygonGeoJson: { type: "Feature", properties: {}, geometry: b.polygon_geojson },
+  };
+  const areaAcres = Math.round(b.area_ha * 2.47105 * 100) / 100;
+  return enrichFarmDraft(b.id, draft, areaAcres);
+}
 
 // ── Default 2 Canonical Farms ─────────────────────────────────────────────────
 
@@ -386,38 +503,99 @@ export function saveFarms(farms: Farm[]): void {
 }
 
 export function useFarmStore() {
-  // Initial state must be identical on the server and the first client
-  // render (getStoredFarms() depends on localStorage, which doesn't exist
-  // server-side) — using it as the initial value here would cause a React
-  // hydration mismatch. Real data loads in the effect below; consumers
-  // should treat `farms` as not-yet-authoritative until `mounted` is true.
-  const [farms, setFarms] = useState<Farm[]>(DEFAULT_FARMS);
+  // `mounted` starts false on both the server and the client's first render
+  // (getUserId()/getStoredFarms() depend on localStorage, which doesn't
+  // exist server-side) — resolving who's signed in inside an effect, rather
+  // than during render, avoids a React hydration mismatch. Consumers should
+  // treat `farms` as not-yet-authoritative until `mounted` is true.
   const [mounted, setMounted] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [guestFarms, setGuestFarms] = useState<Farm[]>(DEFAULT_FARMS);
+  const queryClient = useQueryClient();
+
+  // Guest (signed-out) until we've actually checked — matches the "isGuest"
+  // default every other part of this store already assumes before mount.
+  const isGuest = mounted ? userId === null : true;
 
   useEffect(() => {
+    const uid = getUserId();
+    setUserId(uid);
     setMounted(true);
-    setFarms(getStoredFarms());
-
-    const handleUpdate = () => {
-      setFarms(getStoredFarms());
-    };
-
-    window.addEventListener("fasalsetu_farms_updated", handleUpdate);
-    return () => window.removeEventListener("fasalsetu_farms_updated", handleUpdate);
+    if (uid === null) {
+      setGuestFarms(getStoredFarms());
+    }
   }, []);
 
-  function addFarm(newFarm: Farm) {
-    const updated = [...farms, newFarm];
-    setFarms(updated);
-    saveFarms(updated);
-  }
+  useEffect(() => {
+    if (!mounted || userId !== null) return;
+    const handleUpdate = () => setGuestFarms(getStoredFarms());
+    window.addEventListener("fasalsetu_farms_updated", handleUpdate);
+    return () => window.removeEventListener("fasalsetu_farms_updated", handleUpdate);
+  }, [mounted, userId]);
 
-  function resetToDefault() {
-    setFarms(DEFAULT_FARMS);
+  // Signed-in accounts: farms live in the database, fetched through the real
+  // backend. Guests never hit this (query stays disabled) and keep using
+  // the local demo dataset above.
+  const farmsQuery = useQuery({
+    queryKey: ["farms", userId],
+    queryFn: async () => (await listFarms()).map(backendFarmToFarm),
+    enabled: mounted && userId !== null,
+  });
+
+  const farms = isGuest ? guestFarms : farmsQuery.data ?? [];
+  const ready = mounted && (isGuest || !farmsQuery.isLoading);
+
+  const addFarm = useCallback(
+    async (draft: FarmDraft, clientAreaAcres: number): Promise<Farm> => {
+      if (isGuest) {
+        const farm = enrichFarmDraft(`farm-${Date.now()}`, draft, clientAreaAcres);
+        const updated = [...getStoredFarms(), farm];
+        saveFarms(updated);
+        setGuestFarms(updated);
+        return farm;
+      }
+
+      const geometry = draft.polygonGeoJson?.geometry;
+      if (!geometry) throw new Error("Draw a field boundary before saving.");
+
+      const backendFarm = await createFarm({
+        name: draft.name,
+        crop: draft.crop,
+        variety: draft.variety || null,
+        sowing_date: draft.plantingDate,
+        irrigation_method: draft.irrigationMethod ?? null,
+        polygon_geojson: geometry as GeoJSON.Polygon,
+        state: draft.state || null,
+        district: draft.district || null,
+        address: draft.address || null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["farms", userId] });
+      return backendFarmToFarm(backendFarm);
+    },
+    [isGuest, queryClient, userId]
+  );
+
+  const removeFarm = useCallback(
+    async (farmId: string): Promise<void> => {
+      if (isGuest) {
+        const updated = getStoredFarms().filter((f) => f.id !== farmId);
+        saveFarms(updated);
+        setGuestFarms(updated);
+        return;
+      }
+      await deleteFarm(farmId);
+      await queryClient.invalidateQueries({ queryKey: ["farms", userId] });
+    },
+    [isGuest, queryClient, userId]
+  );
+
+  const resetToDefault = useCallback(() => {
+    if (!isGuest) return;
+    setGuestFarms(DEFAULT_FARMS);
     saveFarms(DEFAULT_FARMS);
-  }
+  }, [isGuest]);
 
-  return { farms, addFarm, resetToDefault, mounted };
+  return { farms, addFarm, removeFarm, resetToDefault, mounted: ready };
 }
 
 // ── Farmer Profile Store ──────────────────────────────────────────────────────

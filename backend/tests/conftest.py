@@ -5,8 +5,10 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
+from app.repositories.farm_repository import FarmRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
+from app.services.farm_service import FarmService
 
 
 @pytest.fixture
@@ -36,3 +38,13 @@ def user_repository(session: AsyncSession) -> UserRepository:
 @pytest.fixture
 def auth_service(user_repository: UserRepository) -> AuthService:
     return AuthService(user_repository)
+
+
+@pytest.fixture
+def farm_repository(session: AsyncSession) -> FarmRepository:
+    return FarmRepository(session)
+
+
+@pytest.fixture
+def farm_service(farm_repository: FarmRepository) -> FarmService:
+    return FarmService(farm_repository)
