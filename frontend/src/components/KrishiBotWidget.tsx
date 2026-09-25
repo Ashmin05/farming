@@ -11,8 +11,9 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare } from "lucide-react";
+import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare, LogIn } from "lucide-react";
 import { apiClient, type ChatMessage } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth/auth-client";
 
 const WELCOME: ChatMessage = {
   id: "welcome",
@@ -24,10 +25,15 @@ const WELCOME: ChatMessage = {
 export default function KrishiBotWidget() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [authed, setAuthed] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setAuthed(isAuthenticated());
+  }, [pathname]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -58,8 +64,53 @@ export default function KrishiBotWidget() {
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {/* Signed-out: prompt to sign in instead of the real chat */}
+      {open && !authed && (
+        <div className="w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-farm-border-color overflow-hidden flex flex-col">
+          <div className="bg-farm-green px-4 py-3 flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
+                <Brain className="w-4 h-4 text-white" />
+              </div>
+              <p className="text-white font-bold text-sm">KrishiBot AI</p>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="p-6 flex flex-col items-center text-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-farm-green-light flex items-center justify-center">
+              <Sprout className="w-6 h-6 text-farm-green" />
+            </div>
+            <p className="text-sm font-bold text-farm-dark">Sign in to chat with KrishiBot AI</p>
+            <p className="text-xs text-farm-muted">
+              Create a free account or sign in to ask about your crop health, irrigation, pests, and market prices.
+            </p>
+            <div className="flex gap-2 w-full mt-1">
+              <Link
+                href="/login"
+                onClick={() => setOpen(false)}
+                className="flex-1 flex items-center justify-center gap-1.5 bg-farm-green text-white text-xs font-semibold py-2.5 rounded-xl hover:bg-farm-green-dark transition-all"
+              >
+                <LogIn className="w-3.5 h-3.5" /> Sign In
+              </Link>
+              <Link
+                href="/register"
+                onClick={() => setOpen(false)}
+                className="flex-1 flex items-center justify-center text-xs font-semibold py-2.5 rounded-xl border border-farm-border-color text-farm-dark hover:border-farm-green hover:text-farm-green transition-all"
+              >
+                Create Account
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Box */}
-      {open && (
+      {open && authed && (
         <div className="w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-farm-border-color overflow-hidden flex flex-col"
           style={{ height: "440px" }}>
           {/* Header */}

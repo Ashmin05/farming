@@ -10,9 +10,10 @@
 // ==============================================================================
 
 import { useState, useRef, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { apiClient, type ChatMessage } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth/auth-client";
 import {
   Brain, Send, Sprout, Mic, Paperclip,
   Loader2, RefreshCw, MessageSquare
@@ -233,10 +234,38 @@ function ChatContent() {
   );
 }
 
+// KrishiBot requires a signed-in account (see also KrishiBotWidget.tsx, which
+// shows a sign-in prompt for the floating widget) -- this gate covers every
+// other way to land on /ai-chat: the home page CTAs, the footer link, or
+// typing the URL directly.
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated()) {
+      setReady(true);
+    } else {
+      router.replace("/login");
+    }
+  }, [router]);
+
+  if (!ready) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64 text-farm-muted">Redirecting to sign in…</div>
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
 export default function AiChatPage() {
   return (
-    <Suspense fallback={<AppLayout><div className="flex items-center justify-center h-64 text-farm-muted">Loading…</div></AppLayout>}>
-      <ChatContent />
-    </Suspense>
+    <AuthGate>
+      <Suspense fallback={<AppLayout><div className="flex items-center justify-center h-64 text-farm-muted">Loading…</div></AppLayout>}>
+        <ChatContent />
+      </Suspense>
+    </AuthGate>
   );
 }
