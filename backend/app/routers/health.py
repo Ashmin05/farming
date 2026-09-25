@@ -19,6 +19,7 @@ async def health_check() -> dict[str, str]:
 class EarthEngineHealthResponse(BaseModel):
     configured: bool
     ok: bool
+    auth_mode: str | None = None  # "service_account" | "application_default" | None
     image_count: int | None = None
     latency_ms: float
     detail: str | None = None
@@ -35,6 +36,7 @@ async def earth_engine_health() -> EarthEngineHealthResponse:
         return EarthEngineHealthResponse(
             configured=True,
             ok=True,
+            auth_mode=earth_engine_client.auth_mode,
             image_count=image_count,
             latency_ms=round((time.perf_counter() - started) * 1000, 1),
         )
@@ -49,6 +51,7 @@ async def earth_engine_health() -> EarthEngineHealthResponse:
         return EarthEngineHealthResponse(
             configured=earth_engine_client.configured,
             ok=False,
+            auth_mode=earth_engine_client.auth_mode,
             latency_ms=round((time.perf_counter() - started) * 1000, 1),
             detail=str(exc),
         )

@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import ee
+from google.auth import default as google_auth_default
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,23 @@ DEFAULT_TIMEOUT_SECONDS = 20.0
 HEALTH_CHECK_LON = 78.9629
 HEALTH_CHECK_LAT = 20.5937
 
+# Scopes Earth Engine needs from Application Default Credentials. Only used
+# on the ADC path (see _initialize_with_application_default_credentials) --
+# the service-account path gets its scope from the key file itself.
+ADC_SCOPES = [
+    "https://www.googleapis.com/auth/earthengine",
+    "https://www.googleapis.com/auth/cloud-platform",
+]
+
+ADC_LOGIN_HINT = f"gcloud auth application-default login --scopes={','.join(ADC_SCOPES)}"
+
 
 class EarthEngineNotConfiguredError(Exception):
-    """Raised when an EE call is attempted but no service-account credentials
-    are configured. Callers should treat this as "feature unavailable", not
-    a server error — see GEE_* in .env.example for what to set."""
+    """Raised when an EE call is attempted but no usable Earth Engine
+    credentials are configured (neither a service account nor Application
+    Default Credentials). Callers should treat this as "feature
+    unavailable", not a server error — see GEE_* in .env.example for what
+    to set."""
 
 
 class EarthEngineTimeoutError(Exception):
@@ -38,49 +51,88 @@ class EarthEngineClient:
     """Thin, async-safe wrapper around the `earthengine-api` SDK.
 
     Construct once (see the `earth_engine_client` singleton below) and call
-    `initialize()` once at app startup. If any of `project_id`,
-    `service_account_email`, or `key_path` is missing, `configured` stays
-    False and every method raises EarthEngineNotConfiguredError instead of
-    touching the network — the app must still boot and serve every other
-    route normally without an Earth Engine key.
+    `initialize()` once at app startup. Two auth paths, tried in this order:
+
+    1. **Service account** (production) — used when `service_account_email`
+       and `key_path` are both set. Needs a downloaded JSON key, which some
+       GCP organizations block via the `iam.disableServiceAccountKeyCreation`
+       policy — see path 2 when that applies.
+    2. **Application Default Credentials** (local development) — used
+       whenever a service-account key isn't configured, as long as
+       `project_id` is set. Uses whatever's logged in locally via
+       `gcloud auth application-default login` — no key file, so it works
+       even when service-account key creation is blocked by org policy.
+
+    If neither path is usable, `configured` stays False and every method
+    raises EarthEngineNotConfiguredError instead of touching the network —
+    the app must still boot and serve every other route normally without a
+    working Earth Engine connection.
     """
 
     def __init__(
         self,
         *,
         project_id: str | None,
-        service_account_email: str | None,
-        key_path: str | None,
+        service_account_email: str | None = None,
+        key_path: str | None = None,
     ) -> None:
         self.project_id = project_id
         self.service_account_email = service_account_email
         self.key_path = key_path
         self.configured = False
+        self.auth_mode: str | None = None  # "service_account" | "application_default" | None
         self.init_error: str | None = None
 
     def initialize(self) -> None:
         """Call once at startup. Never raises — failures are recorded on
         `init_error` and surfaced via `configured`, since a missing or
-        invalid Earth Engine key must not prevent the rest of the API from
-        starting."""
-        if not (self.service_account_email and self.key_path and self.project_id):
+        invalid Earth Engine credential must not prevent the rest of the
+        API from starting."""
+        if not self.project_id:
             self.configured = False
-            self.init_error = (
-                "GEE_SERVICE_ACCOUNT_EMAIL, GEE_KEY_PATH, or GEE_PROJECT_ID is not set."
-            )
+            self.auth_mode = None
+            self.init_error = "GEE_PROJECT_ID is not set."
             logger.info("Earth Engine not configured — %s", self.init_error)
             return
 
+        if self.service_account_email and self.key_path:
+            self._initialize_with_service_account()
+        else:
+            self._initialize_with_application_default_credentials()
+
+    def _initialize_with_service_account(self) -> None:
         try:
             credentials = ee.ServiceAccountCredentials(self.service_account_email, self.key_path)
             ee.Initialize(credentials, project=self.project_id)
             self.configured = True
+            self.auth_mode = "service_account"
             self.init_error = None
-            logger.info("Earth Engine initialised for project %s", self.project_id)
+            logger.info("Earth Engine initialised (service account) for project %s", self.project_id)
         except Exception as exc:  # noqa: BLE001 — any EE/auth failure must not crash startup
             self.configured = False
+            self.auth_mode = None
             self.init_error = str(exc)
-            logger.warning("Earth Engine initialisation failed: %s", exc)
+            logger.warning("Earth Engine service-account initialisation failed: %s", exc)
+
+    def _initialize_with_application_default_credentials(self) -> None:
+        try:
+            credentials, _ = google_auth_default(scopes=ADC_SCOPES)
+            ee.Initialize(credentials, project=self.project_id)
+            self.configured = True
+            self.auth_mode = "application_default"
+            self.init_error = None
+            logger.info(
+                "Earth Engine initialised (application default credentials) for project %s",
+                self.project_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — any EE/auth failure must not crash startup
+            self.configured = False
+            self.auth_mode = None
+            self.init_error = (
+                f"No usable Earth Engine credentials found. Run: {ADC_LOGIN_HINT} "
+                f"(original error: {exc})"
+            )
+            logger.warning("Earth Engine ADC initialisation failed: %s", exc)
 
     async def _get_info(self, ee_object, *, timeout: float = DEFAULT_TIMEOUT_SECONDS):
         """Runs a blocking EE `.getInfo()` call in a worker thread with a
