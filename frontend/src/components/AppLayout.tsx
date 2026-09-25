@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  Sprout, LayoutDashboard, Map, Satellite, CloudRain,
+  Sprout, LayoutDashboard, Map, Satellite,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
   UserCircle
 } from "lucide-react";
@@ -15,7 +15,6 @@ const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
-  { href: "/weather", icon: CloudRain, label: "Weather" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
   { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
