@@ -2,7 +2,7 @@
 
 This document explains what has been built so far: the overall idea, the frontend, the backend,
 the database, authentication, environment configuration, and what is real vs. mock data today.
-It reflects the state of the `profile_fixes` branch.
+It reflects the current state of `main`.
 
 ---
 
@@ -26,18 +26,23 @@ future geospatial work on field boundaries).
 
 ## 2. Repository / branch layout
 
-This is a single repo with the frontend and backend split across branches during initial buildout:
+This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
+`profile_fixes`, `farm-backend`, `earth-engine`) were used during buildout and have all been
+merged into `main`, which is what's pushed to origin and described by this document. Notable
+merged work, roughly in order:
 
-| Branch | Contains |
-| :--- | :--- |
-| `main` | Merge target, pushed to origin. Includes all of `back_auth` and `profile_setup`'s work (JWT + Google auth, profile fields, per-account data isolation). Does **not** yet include `profile_fixes` (below). |
-| `frontend` | The Next.js app as it stood after initial UI buildout (map view, farm search, satellite panel) |
-| `backend` | Adds the FastAPI scaffold (layered structure, async SQLAlchemy, Alembic) on top of `frontend` |
-| `back_auth` | Adds the full JWT + Google auth system, wires the frontend Login/Register pages to it, fixes per-account data isolation, and turns on a real Google OAuth Client ID. Merged into `main`. |
-| `profile_setup` | Branched from `back_auth`; first pass at profile fields, a `/profile` edit page, forgot/reset password, and per-account demo farm data. Merged into `main`. |
-| `profile_fixes` | **Current working branch.** Branched from `main`; fixes a `/profile` infinite-loading bug, removes mock/demo data leaking into logged-in accounts, removes forgot/reset password and "Remember me" entirely (see §6.6), simplifies registration, and makes the public nav auth-aware. Not yet merged to `main`. |
-
-`main` currently reflects `profile_setup`'s design. This document's "what's real" sections below describe `profile_fixes`, the latest state — some of what `profile_setup` added has since been **removed** again (forgot/reset password) or **changed** (demo data, registration flow); see §6.6/§6.7 and §10 for what to expect once this branch merges.
+- `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
+- `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
+- `profile_fixes` — fixed a `/profile` infinite-loading bug, removed mock/demo data leaking into
+  logged-in accounts, removed forgot/reset password and "Remember me" entirely (§6.6), simplified
+  registration, made the public nav auth-aware.
+- `farm-backend` — real database persistence for farms (§5.4), replacing the farms half of the
+  frontend's localStorage-only mock store.
+- `earth-engine` — a Google Earth Engine client with a health-check endpoint (§5.5), the first
+  step toward real satellite crop-health data.
+- Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
+  the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
+  (§4.4).
 
 ---
 
@@ -57,12 +62,16 @@ This is a single repo with the frontend and backend split across branches during
 - `pydantic` / `pydantic-settings` — request/response validation and `.env`-backed config
 - `bcrypt` — password hashing
 - `PyJWT` — access/refresh token signing & verification
-- `google-auth` — verifies "Sign in with Google" ID tokens
+- `google-auth` — verifies "Sign in with Google" ID tokens, and (separately) authenticates the
+  Earth Engine client via Application Default Credentials (§5.5)
+- `shapely` + `pyproj` — validates farm polygons and computes area/centroid using a locally
+  centered equal-area projection (not raw lat/lng math) — see §5.4
+- `earthengine-api` — the official Google Earth Engine Python SDK (§5.5)
 - `pytest` + `pytest-asyncio` + `aiosqlite` — async test suite against an in-memory SQLite DB
 
 **Database**
-- PostgreSQL 17 with the **PostGIS** extension enabled (for future field-geometry storage; not
-  used by any table yet)
+- PostgreSQL 17 with the **PostGIS** extension enabled — farms are stored with a `JSON`/`JSONB`
+  polygon column (not a native PostGIS geometry type yet; see §5.4)
 - Local dev instance managed via pgAdmin
 
 ---
@@ -83,15 +92,17 @@ per the project's own convention (documented in each `page.tsx`).
 | My Farms | `/farms` | `FarmsPage.tsx` |
 | Farm detail / Field detail | `/farms/[farmId]`, `/farms/[farmId]/fields/[fieldId]` | (in `src/app/farms/...`) |
 | Satellite Analysis | `/satellite` | `SatellitePage.tsx` |
-| Weather & Alerts | `/weather` | `WeatherPage.tsx` |
-| KrishiBot AI chat | `/ai-chat` | `AiChatPage.tsx` |
+| Weather & Alerts | `/weather` | `WeatherPage.tsx` — still exists, but no longer linked from the sidebar (removed as a redundant nav item; still reachable by direct URL) |
+| KrishiBot AI chat | `/ai-chat` | `AiChatPage.tsx` — now requires sign-in (§6.8) |
 | Profile | `/profile` | `ProfilePage.tsx` |
 | Features | `/features` | `FeaturesPage.tsx` |
 | Help Center | `/help` | `HelpPage.tsx` |
 
 `AppLayout.tsx` provides the shared sidebar/nav shell for the logged-in app pages (Dashboard,
-Farms, Satellite, Weather, AI chat, Profile, Help). Login/Register/Home are standalone, full-page
-layouts using the public `Navbar.tsx` (Home) or their own minimal header (Login/Register).
+Farms, Satellite, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
+above). Login/Register/Home are standalone, full-page layouts using the public `Navbar.tsx`
+(Home) or their own minimal header (Login/Register) — Login/Register also have their own
+glassmorphism background (§4.4).
 
 ### 4.2 Two separate data layers (important distinction)
 
@@ -110,14 +121,22 @@ The frontend actually has **two unrelated data systems**, which is a common poin
   `false` today would break every data page. This is intentionally left as mock-only for now.
 
 **B. `src/lib/stores/farmStore.ts` — the actual data source for Dashboard/Farms/Satellite pages**
-- This is a separate, older, localStorage-backed store — *not* routed through `src/lib/api/` at
-  all. It ships two canonical demo farms (Nashik Onion Field, Pune Wheat Block) with full
-  synthetic soil/water/weather/satellite/yield detail baked in.
 - `useFarmStore()` / `useUserStore()` are the hooks Dashboard/Farms/Satellite/AppLayout actually
-  use for farm data and the farmer's profile (name/phone/state/language).
-- **This store is now namespaced per logged-in user** (see §6.4) — each account's farms/profile
-  live under their own localStorage key, and a fresh account starts with zero farms rather than
-  the demo dataset. Signed-out visitors still see the two demo farms.
+  use for farm data and the farmer's profile (name/phone/state/language). This is *not* routed
+  through `src/lib/api/`'s mock/real-client split (A, above) — it's its own thing.
+- **Signed-in users now get real farms from the backend** (`src/lib/api/farms-client.ts` →
+  `GET/POST/DELETE /farms`, §5.4), fetched via TanStack Query inside `useFarmStore()`. A fresh
+  account starts with zero farms and calls "Register a Farm" to create a real one, persisted in
+  Postgres — no more fabricated data for real accounts.
+- **Signed-out guests still see localStorage-only mock data** — two canonical demo farms (Nashik
+  Onion Field, Pune Wheat Block) with full synthetic soil/water/weather/satellite/yield detail,
+  namespaced under a `:guest` key (§6.4). This is unchanged from before and intentional — it lets
+  a visitor explore the UI without an account.
+- `enrichFarmDraft()` / `backendFarmToFarm()` in `farmStore.ts` bridge the two shapes: a real
+  farm from the backend only has geometry + crop/name/location, so the store still layers the
+  same synthetic yield/soil/water/weather/satellite detail on top of it client-side (that data
+  isn't backed by anything real yet — see §9) while the farm's identity, boundary, and area are
+  now genuinely persisted.
 
 **C. `src/lib/auth/auth-client.ts` — a third, dedicated client for authentication**
 - Always calls the real backend's `/auth/*` routes directly (not gated by `NEXT_PUBLIC_USE_MOCKS`
@@ -152,6 +171,15 @@ The frontend actually has **two unrelated data systems**, which is a common poin
   "Sign out" instead of "Login" once a token is present, so a signed-in visitor never sees a
   dead-end "Login" button on public pages.
 
+### 4.4 Login / Register background
+
+Both pages float their form in a frosted-glass card (`bg-white/60 backdrop-blur-2xl`) over a
+full-bleed aerial satellite photo of farmland (`/images/field_satellite.jpg`) with a dark
+gradient overlay for text contrast — tying the auth screens visually to the product's Earth
+Engine/satellite-analysis identity. This is scoped to just Login/Register; the main app pages
+(Dashboard, Farms, Satellite, KrishiBot AI, Profile, Help) intentionally use a plain solid
+background, not this photo.
+
 ---
 
 ## 5. Backend
@@ -165,49 +193,119 @@ backend/
 │   │   ├── config.py      # pydantic-settings Settings, loaded from root .env
 │   │   ├── database.py    # async SQLAlchemy engine + session + get_db() FastAPI dependency
 │   │   ├── security.py    # bcrypt hashing, JWT create/decode
-│   │   └── deps.py        # get_current_user() FastAPI dependency (Bearer token → User)
+│   │   ├── deps.py        # get_current_user() FastAPI dependency (Bearer token → User)
+│   │   └── geometry.py    # farm polygon validation + area/centroid math (shapely + pyproj)
 │   ├── models/
 │   │   ├── base.py        # declarative Base (Alembic autogenerate target)
-│   │   └── user.py        # User ORM model
+│   │   ├── user.py        # User ORM model
+│   │   └── farm.py        # Farm ORM model
 │   ├── schemas/
-│   │   └── auth.py        # pydantic request/response models for /auth/*
+│   │   ├── auth.py        # pydantic request/response models for /auth/*
+│   │   └── farm.py        # pydantic request/response models for /farms
 │   ├── repositories/
-│   │   └── user_repository.py   # DB queries for User (data-access layer)
+│   │   ├── user_repository.py   # DB queries for User (data-access layer)
+│   │   └── farm_repository.py   # DB queries for Farm, scoped to owner
 │   ├── integrations/
-│   │   └── google_auth.py       # verifies Google "Sign in with Google" ID tokens
+│   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
+│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5)
 │   ├── services/
-│   │   └── auth_service.py      # business logic: register/login/refresh/google login
+│   │   ├── auth_service.py      # business logic: register/login/refresh/google login
+│   │   └── farm_service.py      # business logic: create/list/update/delete farms
 │   ├── routers/
-│   │   ├── health.py      # GET /health
-│   │   └── auth.py        # register/login/google/refresh/me + profile
-│   └── main.py             # FastAPI app, CORS, router registration
+│   │   ├── health.py      # GET /health, GET /health/earth-engine
+│   │   ├── auth.py        # register/login/google/refresh/me + profile
+│   │   └── farms.py       # farm CRUD, all scoped to the current user
+│   └── main.py             # FastAPI app, CORS, router registration, Earth Engine startup init
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite)
+└── tests/                   # pytest suite (async, in-memory SQLite) — 37 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
 → **repositories** (DB queries) → **models** (ORM). `schemas/` are the pydantic request/response
-shapes, kept separate from the ORM models.
+shapes, kept separate from the ORM models. `integrations/` wraps external services (Google auth,
+Earth Engine) behind a small interface the rest of the app depends on.
 
 ### 5.2 API surface today
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
 | GET | `/health` | Liveness check |
+| GET | `/health/earth-engine` | Earth Engine connectivity check — never 500s, always returns `{configured, ok, auth_mode, image_count, latency_ms, detail}` (§5.5) |
 | POST | `/auth/register` | Create an account (email, password, optional full name — `phone`/`state`/`location` are also accepted but unused by the frontend, see §6.6) |
 | POST | `/auth/login` | Exchange email/password for an access + refresh token pair |
 | POST | `/auth/google` | Exchange a Google ID token for an access + refresh token pair |
 | POST | `/auth/refresh` | Exchange a valid refresh token for a new access token |
 | GET | `/auth/me` | Return the current user (requires `Authorization: Bearer <access_token>`) |
 | PATCH | `/auth/profile` | Update the current user's `full_name`/`phone`/`state`/`location` (email is never editable here) |
+| GET | `/farms` | List the current user's farms |
+| POST | `/farms` | Create a farm (name, crop, polygon GeoJSON) — area/centroid computed server-side (§5.4) |
+| GET | `/farms/{farm_id}` | Get one farm — 404 (never 403) if it's not yours |
+| PATCH | `/farms/{farm_id}` | Update a farm — 404 if it's not yours |
+| DELETE | `/farms/{farm_id}` | Delete a farm — 404 if it's not yours |
 
-Nothing else is implemented server-side yet — no `/farms`, `/fields`, `/satellite`, `/weather`,
-etc. Those all remain frontend-mock-only for now (§4.2).
+Still not implemented server-side: `/fields`, `/satellite` (analysis results), `/weather`,
+`/irrigation`, `/yield`, chat. Those remain frontend-mock-only for now (§4.2).
 
 ### 5.3 CORS
 
 `FRONTEND_ORIGIN` (env var) is the single allowed CORS origin (`http://localhost:3000` in dev) —
 deliberately not a wildcard.
+
+### 5.4 Farm persistence
+
+Farms used to live only in the frontend's localStorage. They're now real, backend-owned records:
+
+- **`Farm` model** (`app/models/farm.py`): `id`, `owner_id` (FK → `users.id`), `name`, `crop`,
+  `planted_date`, `polygon_geojson`, `area_hectares`, `centroid_lat`, `centroid_lng`,
+  `created_at`. `polygon_geojson` uses `JSON().with_variant(JSONB(), "postgresql")` so the same
+  model works against both real Postgres (JSONB) and the in-memory SQLite test DB (plain JSON).
+- **Area/centroid are computed server-side**, not trusted from the client — `app/core/geometry.py`
+  validates the polygon with `shapely`, then projects it into a **local Albers Equal-Area CRS
+  centered on the polygon's own centroid** (via `pyproj`) before measuring area, rather than doing
+  raw lat/lng math (which distorts area badly, especially at scale). Polygons outside a sane
+  0.05–500 hectare range, or that are self-intersecting/invalid, are rejected with a clear error.
+- **Ownership is enforced at the repository layer** — every query is scoped to
+  `owner_id == current_user.id`, and a farm that exists but belongs to someone else returns
+  **404, never 403** (so you can't even confirm another user's farm id exists).
+- The migration (`9b61433cc742_add_farms_table.py`) is hand-written, not autogenerated, and uses
+  the real `postgresql.JSONB` type (the model's cross-dialect variant is a test-only concession).
+- On the frontend, `src/lib/api/farms-client.ts` calls this API and `farmStore.ts` wires it into
+  `useFarmStore()` for signed-in users (§4.2B) — this is the one piece of "real backend data" in
+  an otherwise mock-heavy farm data story (see §9).
+
+### 5.5 Google Earth Engine integration
+
+A first step toward real satellite crop-health data (today's satellite/NDVI numbers on
+Dashboard/Satellite are still synthetic — see §9):
+
+- **`app/integrations/earth_engine_client.py`** wraps the `earthengine-api` SDK behind a small
+  `EarthEngineClient` class that degrades gracefully instead of crashing the app — if Earth Engine
+  isn't configured or reachable, `configured`/`ok` come back `false` with a `detail` message
+  rather than raising.
+- **Two supported auth paths**, tried in order:
+  1. **Service-account key** (`GEE_SERVICE_ACCOUNT_EMAIL` + `GEE_KEY_PATH`) — the normal path for
+     production, but **not usable in this project's GCP org**, which blocks service-account key
+     creation via the `iam.disableServiceAccountKeyCreation` org policy.
+  2. **Application Default Credentials** (ADC) — the actual path used in local dev today. Run
+     once per machine:
+     ```bash
+     gcloud auth application-default login --scopes=https://www.googleapis.com/auth/earthengine,https://www.googleapis.com/auth/cloud-platform
+     ```
+     This signs in with your own Google account (which must have registered the `GEE_PROJECT_ID`
+     project for Earth Engine access at https://code.earthengine.google.com/register) and saves
+     credentials to `%APPDATA%\gcloud\application_default_credentials.json` (Windows) — read
+     automatically by `google.auth.default()`, no key file needed. `GEE_PROJECT_ID` is passed
+     explicitly to `ee.Initialize(credentials, project=...)`; it does **not** have to match
+     whatever "quota project" `gcloud` itself is configured to use, which is a separate, mostly
+     unrelated bit of `gcloud` bookkeeping.
+- Blocking Earth Engine calls (`.getInfo()`) are wrapped in `asyncio.to_thread` + a
+  `asyncio.wait_for` timeout, so a slow/hung Earth Engine call can never block the FastAPI event
+  loop for other requests.
+- **`GET /health/earth-engine`** is the way to check this is actually working — it runs a real
+  test query (`count_recent_sentinel2_images`, a Sentinel-2 image count near a fixed point) and
+  reports `{configured, ok, auth_mode, image_count, latency_ms, detail}`. `ok: true` with a
+  non-null `image_count` means it's genuinely connected, not just configured.
+- The client initializes once at FastAPI startup (`lifespan` in `app/main.py`), not per-request.
 
 ---
 
@@ -375,6 +473,20 @@ design. This is enforced in `getStoredFarms()`: `isGuest ? DEFAULT_FARMS : []`.
 Dashboard/Satellite both show a proper empty state with a "Register a Farm" call-to-action when a
 real account has no farms yet, rather than a bare line of text.
 
+### 6.8 KrishiBot AI now requires sign-in
+
+Previously the AI chat was reachable by anyone, signed in or not. It's now gated at both entry
+points:
+
+- **`KrishiBotWidget.tsx`** (the floating chat bubble on every page): if opened while signed out,
+  it shows a "Sign in to chat with KrishiBot AI" panel with Sign In / Create Account links instead
+  of the chat UI. It also hides itself entirely on `/login` and `/register`.
+- **`AiChatPage.tsx`** (the full `/ai-chat` page): wrapped in an `AuthGate` that redirects to
+  `/login` via `router.replace()` if `isAuthenticated()` is false — this covers every other way to
+  land on the page (typed URL, footer link, bookmark), not just the widget.
+- The homepage hero's standalone "Ask KrishiBot" button was also removed — chat is now only
+  reachable through the widget or `/ai-chat` directly, both gated as above.
+
 ---
 
 ## 7. Environment variables
@@ -398,6 +510,8 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Backend | Default `30` |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Backend | Default `7` |
 | `GOOGLE_CLIENT_ID` | Backend | Same value as `NEXT_PUBLIC_GOOGLE_CLIENT_ID` — verifies Google ID tokens |
+| `GEE_PROJECT_ID` | Backend | The Google Cloud project registered for Earth Engine access (§5.5) — required for Earth Engine to work at all |
+| `GEE_SERVICE_ACCOUNT_EMAIL` / `GEE_KEY_PATH` | Backend | Optional production auth path (service-account key). Leave both blank to use local Application Default Credentials instead (§5.5) — that's the dev setup today |
 
 ---
 
@@ -406,12 +520,20 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 **Database**: PostgreSQL with PostGIS running locally (e.g. via pgAdmin), a database + user
 created, `DATABASE_URL` pointed at it in the root `.env`.
 
+**Earth Engine (optional but recommended)**: register `GEE_PROJECT_ID` for Earth Engine access at
+https://code.earthengine.google.com/register, set it in `.env`, then run once per machine:
+```bash
+gcloud auth application-default login --scopes=https://www.googleapis.com/auth/earthengine,https://www.googleapis.com/auth/cloud-platform
+```
+Skipping this is fine — the backend starts up and runs normally without it, `/health/earth-engine`
+just reports `configured: false` / `ok: false` with a `detail` explaining why.
+
 **Backend**:
 ```bash
 cd backend
 python -m venv venv && venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-alembic upgrade head        # applies all users-table migrations, incl. phone/state/location
+alembic upgrade head        # applies all migrations, incl. phone/state/location and farms
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -419,7 +541,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 14 tests, async, in-memory SQLite — no Postgres needed
+pytest        # 37 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
 **Frontend**:
@@ -440,10 +562,14 @@ npm run dev    # http://localhost:3000
 | Profile editing (name/phone/state/location) | ✅ Real — `PATCH /auth/profile`, email fixed/read-only |
 | Profile completion gate (all signup methods) | ✅ Real — routes to `/profile?complete=1` until phone+state are set |
 | Per-account data isolation | ✅ Real — localStorage namespaced by user id |
+| Farm records (name, crop, boundary, area/centroid) | ✅ Real for signed-in users — `/farms` API, persisted in Postgres, geometry computed server-side; see §5.4 |
 | Mock/demo farm data only for signed-out guests | ✅ Real — see §6.7; a real account always starts empty, no fabricated data |
 | Auth-aware public nav (Login vs. Sign out) | ✅ Real — `Navbar.tsx`, see §4.3 |
-| Farms / Fields / Satellite / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests only); no backend endpoints exist yet |
-| KrishiBot AI chat | ❌ Mock only — via `mock-client.ts` |
+| KrishiBot AI chat requires sign-in | ✅ Real — see §6.8 |
+| Earth Engine connectivity | ✅ Real (when `GEE_PROJECT_ID` + ADC login are set up) — `/health/earth-engine` runs a live Sentinel-2 query; see §5.5 |
+| Per-farm satellite/NDVI/soil/water/weather/yield numbers shown on Dashboard/Satellite | ❌ Still synthetic — `enrichFarmDraft()` in `farmStore.ts` generates these client-side even for a real farm; Earth Engine is connected (above) but not yet wired to actually populate these numbers per farm |
+| Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms exist yet |
+| KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
 | "Remember me" checkbox on login | ❌ Removed — was UI-only and never did anything |
 
@@ -451,16 +577,23 @@ npm run dev    # http://localhost:3000
 
 ## 10. Known gaps / natural next steps
 
-- Merge `profile_fixes` into `main` once reviewed.
 - Set a real `JWT_SECRET_KEY` before any non-local deployment.
 - Add the production frontend origin to the Google OAuth client's authorized origins before
   deploying (currently only `http://localhost:3000` is authorized).
 - **If password reset is wanted again**, don't resurrect the dev-token workaround — set up a real
   email service (SES/SendGrid/Postmark) first, since that was the reason it got removed.
-- Build real backend endpoints for farms/fields/satellite/weather/yield, and a corresponding
-  `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) — this is the largest remaining piece
-  of backend work.
+- **Wire Earth Engine into the per-farm satellite numbers** — the client and health check are real
+  (§5.5), but Dashboard/Satellite's NDVI/canopy/moisture figures are still `enrichFarmDraft()`'s
+  synthetic data, not a real query against a farm's actual polygon. This is the natural next step
+  now that both farm geometry (§5.4) and Earth Engine connectivity (§5.5) exist independently.
+- Build real backend endpoints for fields/weather/irrigation/yield, and a corresponding
+  `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the farms
+  API or Earth Engine.
 - Add email verification (registration currently trusts any email address given).
 - Add authenticated route protection (currently `/dashboard` etc. are reachable without being
   logged in — they just show guest demo data instead of redirecting to `/login`; that's an
   intentional "let people explore before signing up" choice today, but worth revisiting).
+- For production Earth Engine auth, either get the org's `iam.disableServiceAccountKeyCreation`
+  policy relaxed for a dedicated service account, or find another non-interactive auth path — ADC
+  (§5.5) requires an interactive `gcloud` login per machine, which doesn't work for a server
+  deployment.
