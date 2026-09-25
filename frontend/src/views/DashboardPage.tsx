@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { farms } = useFarmStore();
+  const { farms, mounted } = useFarmStore();
   const { profile } = useUserStore();
   const [selectedFarmId, setSelectedFarmId] = useState<string>(farms[0]?.id || "farm-1");
 
@@ -35,6 +35,13 @@ export default function DashboardPage() {
   const [calcCrop, setCalcCrop] = useState<string>("Onion");
 
   const currentFarm = farms.find((f) => f.id === selectedFarmId) || farms[0];
+
+  // Until the real (per-account) farm list has loaded client-side, `farms`
+  // is still the SSR-safe placeholder — render an empty shell rather than
+  // flash it (keep the sidebar so the layout doesn't jump).
+  if (!mounted) {
+    return <AppLayout>{null}</AppLayout>;
+  }
 
   if (!currentFarm) {
     return (

@@ -3,9 +3,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  Sprout, LayoutDashboard, Map, Satellite, CloudRain,
+  Sprout, LayoutDashboard, Map, Satellite,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
-  Bell, UserCircle
+  UserCircle
 } from "lucide-react";
 
 import { useUserStore } from "@/lib/stores/farmStore";
@@ -15,7 +15,6 @@ const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
-  { href: "/weather", icon: CloudRain, label: "Weather" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
   { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
@@ -125,19 +124,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </Link>
 
           <div className="flex-1" />
-
-          {/* MOCK indicator */}
-          {process.env.NEXT_PUBLIC_USE_MOCKS === "true" && (
-            <span className="hidden sm:inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium px-2.5 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Mock data
-            </span>
-          )}
-
-          <button className="relative p-2 rounded-lg hover:bg-farm-green-light text-farm-muted hover:text-farm-green transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
-          </button>
         </header>
 
         {/* Page content */}

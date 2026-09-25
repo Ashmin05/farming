@@ -18,9 +18,16 @@ import AppLayout from "@/components/AppLayout";
 import { getCurrentUser, updateProfile, isAuthenticated, AuthError, type AuthUser } from "@/lib/auth/auth-client";
 import { saveProfile, getStoredProfile } from "@/lib/stores/farmStore";
 
+// All 28 Indian states + 8 union territories, alphabetical.
 const states = [
-  "Maharashtra", "Punjab", "Uttar Pradesh", "Madhya Pradesh", "Rajasthan",
-  "Bihar", "Haryana", "West Bengal", "Odisha", "Gujarat",
+  "Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam",
+  "Bihar", "Chandigarh", "Chhattisgarh",
+  "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Goa", "Gujarat",
+  "Haryana", "Himachal Pradesh", "Jammu and Kashmir", "Jharkhand", "Karnataka",
+  "Kerala", "Ladakh", "Lakshadweep", "Madhya Pradesh", "Maharashtra",
+  "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Puducherry",
+  "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura",
+  "Uttar Pradesh", "Uttarakhand", "West Bengal",
 ];
 
 export default function ProfilePage() {
@@ -181,9 +188,13 @@ export default function ProfilePage() {
                 <input
                   id="profile-phone"
                   type="tel"
+                  inputMode="numeric"
                   required
+                  pattern="\d{10}"
+                  maxLength={10}
+                  title="Enter a 10-digit mobile number"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                   placeholder="9876543210"
                   className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
                 />
