@@ -123,12 +123,6 @@ export default function HomePage() {
                 {t.btnExplore}
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
-              <Link
-                href="/ai-chat"
-                className="inline-flex items-center justify-center gap-2 bg-white/15 backdrop-blur-sm text-white px-5 py-3.5 rounded-xl font-semibold border border-white/30 hover:bg-white/25 transition-all duration-200 text-base"
-              >
-                {t.btnAskBot}
-              </Link>
             </div>
           </div>
         </div>
