@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 // ==============================================================================
@@ -22,16 +23,21 @@ const topics = [
 
 export default function HelpPage() {
   return (
-    <div className="min-h-screen bg-white" data-theme="light">
+    <div className="min-h-screen relative" data-theme="light">
+      <div className="fixed inset-0 pointer-events-none select-none bg-farm-gray">
+        <Image src="/images/field_satellite.jpg" alt="" fill priority className="object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-b from-white/35 via-white/25 to-white/45" />
+      </div>
+
       <Navbar />
-      <div className="pt-24 pb-14 bg-farm-green-light border-b border-farm-border-color text-center">
+      <div className="pt-24 pb-14 bg-farm-green-light/85 backdrop-blur-sm border-b border-farm-border-color text-center">
         <h1 className="text-4xl font-bold text-farm-dark mb-3">Help Center</h1>
         <p className="text-farm-muted max-w-md mx-auto">Find answers, guides, and contact options below.</p>
       </div>
       <div className="max-w-4xl mx-auto px-4 py-16">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           {topics.map(({ icon: Icon, title, desc, href }) => (
-            <Link key={title} href={href} className="group p-6 rounded-2xl border border-farm-border-color hover:shadow-card-hover hover:border-farm-green transition-all">
+            <Link key={title} href={href} className="group p-6 rounded-2xl bg-white/85 backdrop-blur-sm border border-farm-border-color hover:shadow-card-hover hover:border-farm-green transition-all">
               <div className="w-11 h-11 bg-farm-green-light rounded-xl flex items-center justify-center mb-4">
                 <Icon className="w-5 h-5 text-farm-green" />
               </div>
@@ -44,7 +50,7 @@ export default function HelpPage() {
           ))}
         </div>
 
-        <div className="mt-16 bg-farm-sand rounded-2xl p-8 text-center border border-farm-border-color">
+        <div className="mt-16 bg-farm-sand/90 backdrop-blur-sm rounded-2xl p-8 text-center border border-farm-border-color">
           <h2 className="text-xl font-bold text-farm-dark mb-2">Need more help?</h2>
           <p className="text-farm-muted text-sm mb-4">Chat with our agronomists in your language — Mon to Sat, 7am to 8pm</p>
           <a href="mailto:support@fasalsetu.in" className="inline-flex items-center gap-2 bg-farm-green text-white px-6 py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all">
