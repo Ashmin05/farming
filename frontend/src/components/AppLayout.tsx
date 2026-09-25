@@ -1,5 +1,4 @@
 "use client";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -21,28 +20,13 @@ const nav = [
   { href: "/help", icon: HelpCircle, label: "Help" },
 ];
 
-const FADED_BG_ROUTES = ["/dashboard", "/farms", "/satellite", "/ai-chat"];
-
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { profile } = useUserStore();
-  const showFadedBg = FADED_BG_ROUTES.some((route) => pathname === route || pathname.startsWith(route + "/"));
 
   return (
-    <div className={`min-h-screen flex ${showFadedBg ? "" : "bg-farm-gray"}`}>
-      {showFadedBg && (
-        <div className="fixed inset-0 z-[1] pointer-events-none select-none bg-farm-gray">
-          <Image
-            src="/images/field_satellite.jpg"
-            alt=""
-            fill
-            priority
-            className="object-cover opacity-[0.35]"
-          />
-        </div>
-      )}
-
+    <div className="min-h-screen bg-farm-gray flex">
       {/* ── Sidebar ── */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-farm-border-color flex flex-col transition-transform duration-200 ${
