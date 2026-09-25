@@ -20,3 +20,6 @@ alembic>=1.13.1           # Database migrations
 bcrypt>=4.1.2              # Password hashing
 pyjwt>=2.8.0               # JWT access/refresh token encode-decode
 google-auth>=2.29.0        # Verifies "Sign in with Google" ID tokens
+shapely>=2.0.4              # Farm polygon validation
+pyproj>=3.6.1                # Equal-area projection for farm area/centroid math
+earthengine-api>=1.0.0       # Google Earth Engine: satellite crop-health analysis

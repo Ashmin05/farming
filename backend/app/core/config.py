@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     SATELLITE_API_KEY: str | None = None
     AI_API_KEY: str | None = None
 
+    # Google Earth Engine (app/integrations/earth_engine_client.py).
+    # GEE_PROJECT_ID is always required. GEE_SERVICE_ACCOUNT_EMAIL/
+    # GEE_KEY_PATH are optional — set both for production (a service-account
+    # key); leave both blank for local dev, where the client instead uses
+    # Application Default Credentials from `gcloud auth application-default
+    # login` (works even when an org policy blocks service-account key
+    # creation). If GEE_PROJECT_ID itself is missing, the client just stays
+    # "not configured" and the rest of the API still starts normally.
+    GEE_PROJECT_ID: str | None = None
+    GEE_SERVICE_ACCOUNT_EMAIL: str | None = None
+    GEE_KEY_PATH: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

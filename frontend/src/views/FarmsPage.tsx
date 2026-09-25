@@ -18,11 +18,11 @@ import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
 import MapView from "@/components/map/MapView";
-import { useFarmStore, Farm, generateFarmWeather } from "@/lib/stores/farmStore";
+import { useFarmStore, Farm, FarmDraft } from "@/lib/stores/farmStore";
 import {
   MapPin, ChevronRight, Plus, Leaf, X, CheckCircle2,
   Edit3, Calendar, Search, Navigation,
-  Satellite
+  Satellite, AlertCircle
 } from "lucide-react";
 
 const CROPS = [
@@ -59,7 +59,7 @@ function RegisterFarmModal({
   onSave,
 }: {
   onClose: () => void;
-  onSave: (farm: Farm) => void;
+  onSave: (draft: FarmDraft, areaAcres: number) => Promise<void>;
 }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(blankForm);
@@ -68,6 +68,8 @@ function RegisterFarmModal({
   const [geocodedCenter, setGeocodedCenter] = useState<[number, number] | undefined>();
   const [searchLocationQuery, setSearchLocationQuery] = useState("");
   const [searchSearching, setSearchSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
 
   const today = new Date().toISOString().split("T")[0];
@@ -141,13 +143,10 @@ function RegisterFarmModal({
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     const acres = parseFloat(form.area) || 2.5;
-    const estQuintals = Math.round(acres * 22);
-    const estPrice = 2400;
 
-    const newFarm: Farm = {
-      id: "farm-" + Date.now(),
+    const draft: FarmDraft = {
       name: form.name.trim() || "My New Farm",
       address: form.address.trim() || "Maharashtra, India",
       district: form.address.split(",")[0]?.trim() || "Rural",
@@ -155,59 +154,29 @@ function RegisterFarmModal({
       crop: form.crop || "Rice",
       variety: "High-Yield Local",
       plantingDate: form.plantingDate || today,
-      areaAcres: acres,
       center: geocodedCenter || [73.8567, 18.5204],
       polygonGeoJson: drawnPolygon,
-      yield: {
-        estimatedQuintals: estQuintals,
-        expectedPricePerQtl: estPrice,
-        totalEstimatedValue: estQuintals * estPrice,
-        harvestWindow: "3–4 months post sowing",
-        historicalYieldComparison: "New field benchmark",
-      },
-      soil: {
-        ph: parseFloat(form.soil.ph) || 6.8,
-        nitrogen: (form.soil.nitrogen as SoilLevel) || "Medium",
-        phosphorus: (form.soil.phosphorus as SoilLevel) || "Medium",
-        potassium: (form.soil.potassium as SoilLevel) || "Medium",
-        organicMatter: form.soil.organicMatter || "2.1%",
-        moisturePercent: 30,
-        healthRating: "Optimal",
-      },
-      water: {
-        status: "Optimal",
-        canopyMoisturePercent: 72,
-        soilMoisturePercent: 30,
-        lastIrrigationDaysAgo: 1,
-        nextRecommendedAction: "Maintain standard crop watering schedule.",
-      },
-      weather: generateFarmWeather(form.name, form.address, form.crop),
-      satellite: {
-        meanNdvi: 0.68,
-        minNdvi: 0.42,
-        maxNdvi: 0.81,
-        ndwi: 0.42,
-        canopyVigourLabel: "Good",
-        healthyCanopyPercent: 80,
-        moderateCanopyPercent: 16,
-        stressedCanopyPercent: 4,
-        history: [
-          { date: "Planting", ndvi: 0.2, benchmark: 0.2, stage: "Sowing" },
-          { date: "Current", ndvi: 0.68, benchmark: 0.65, stage: "Vegetative" },
-        ],
-        stressZones: [],
-        metadata: {
-          satelliteMission: "ESA Sentinel-2B L2A",
-          acquisitionDate: "Recent Overpass",
-          cloudCoveragePercent: 0.3,
-          spatialResolution: "10m Multispectral",
-          dataQualityConfidence: 98.2,
-          sunElevationAngle: "58°",
-        },
-      },
+      soilOverride: form.hasSoilReport
+        ? {
+            ph: parseFloat(form.soil.ph) || undefined,
+            nitrogen: form.soil.nitrogen as SoilLevel,
+            phosphorus: form.soil.phosphorus as SoilLevel,
+            organicMatter: form.soil.organicMatter || undefined,
+          }
+        : undefined,
     };
 
-    onSave(newFarm);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(draft, acres);
+      return true;
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not save this farm. Please try again.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function advanceFromStep0() {
@@ -535,23 +504,32 @@ function RegisterFarmModal({
                 </div>
               </div>
 
+              {saveError && (
+                <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{saveError}</span>
+                </div>
+              )}
+
               <div className="flex justify-between pt-4">
                 <button
                   type="button"
                   onClick={() => setStep(2)}
-                  className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark"
+                  disabled={saving}
+                  className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark disabled:opacity-40"
                 >
                   ← Edit Boundary
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    handleSave();
-                    onClose();
+                  disabled={saving}
+                  onClick={async () => {
+                    const ok = await handleSave();
+                    if (ok) onClose();
                   }}
-                  className="px-6 py-2.5 bg-farm-green text-white rounded-xl text-sm font-semibold hover:bg-farm-green-dark shadow-md transition-all flex items-center gap-2"
+                  className="px-6 py-2.5 bg-farm-green text-white rounded-xl text-sm font-semibold hover:bg-farm-green-dark shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Plus className="w-4 h-4" /> Save & Activate Farm
+                  <Plus className="w-4 h-4" /> {saving ? "Saving..." : "Save & Activate Farm"}
                 </button>
               </div>
             </div>
@@ -580,9 +558,8 @@ export default function FarmsPage() {
       {showModal && (
         <RegisterFarmModal
           onClose={() => setShowModal(false)}
-          onSave={(newFarm) => {
-            addFarm(newFarm);
-            setShowModal(false);
+          onSave={async (draft, areaAcres) => {
+            await addFarm(draft, areaAcres);
           }}
         />
       )}
