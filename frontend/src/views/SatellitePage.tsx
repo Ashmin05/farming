@@ -96,7 +96,7 @@ function FarmCard({
 function SatelliteContent() {
   const searchParams = useSearchParams();
   const farmParam = searchParams.get("farm");
-  const { farms } = useFarmStore();
+  const { farms, mounted } = useFarmStore();
 
   const [selectedId, setSelectedId] = useState<string>(farms[0]?.id || "farm-1");
   const [activeLayer, setActiveLayer] = useState<SatelliteMapLayer>("ndvi");
@@ -108,6 +108,12 @@ function SatelliteContent() {
   }, [farmParam, farms]);
 
   const selectedFarm = farms.find((f) => f.id === selectedId) || farms[0];
+
+  // Until the real (per-account) farm list has loaded client-side, `farms`
+  // is still the SSR-safe placeholder — render nothing rather than flash it.
+  if (!mounted) {
+    return null;
+  }
 
   if (!selectedFarm) {
     return (

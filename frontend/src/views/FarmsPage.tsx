@@ -565,8 +565,15 @@ function RegisterFarmModal({
 // ── Main Farms View ───────────────────────────────────────────────────────────
 
 export default function FarmsPage() {
-  const { farms, addFarm } = useFarmStore();
+  const { farms, addFarm, mounted } = useFarmStore();
   const [showModal, setShowModal] = useState(false);
+
+  // Until the real (per-account) farm list has loaded client-side, `farms`
+  // is still the SSR-safe placeholder — render an empty shell rather than
+  // flash it (keep the sidebar so the layout doesn't jump).
+  if (!mounted) {
+    return <AppLayout>{null}</AppLayout>;
+  }
 
   return (
     <AppLayout>

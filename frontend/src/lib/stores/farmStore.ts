@@ -386,6 +386,11 @@ export function saveFarms(farms: Farm[]): void {
 }
 
 export function useFarmStore() {
+  // Initial state must be identical on the server and the first client
+  // render (getStoredFarms() depends on localStorage, which doesn't exist
+  // server-side) — using it as the initial value here would cause a React
+  // hydration mismatch. Real data loads in the effect below; consumers
+  // should treat `farms` as not-yet-authoritative until `mounted` is true.
   const [farms, setFarms] = useState<Farm[]>(DEFAULT_FARMS);
   const [mounted, setMounted] = useState(false);
 
