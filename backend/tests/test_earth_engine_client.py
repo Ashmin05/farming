@@ -1,12 +1,17 @@
 """Tests for EarthEngineClient. The real `ee` module is always mocked here —
 these tests never need real Earth Engine credentials or network access."""
 
-from unittest.mock import MagicMock
+from datetime import date
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.integrations import earth_engine_client as eec
-from app.integrations.earth_engine_client import EarthEngineClient, EarthEngineNotConfiguredError
+from app.integrations.earth_engine_client import (
+    EarthEngineClient,
+    EarthEngineNotConfiguredError,
+    NoSentinelImageryAvailableError,
+)
 
 
 def _unconfigured_client() -> EarthEngineClient:
@@ -164,3 +169,165 @@ class TestCountRecentSentinel2Images:
 
         with pytest.raises(eec.EarthEngineTimeoutError):
             await client.count_recent_sentinel2_images()
+
+
+class TestSelectBestImage:
+    """Pure Python selection logic -- no Earth Engine involved, so these run
+    against plain dicts shaped like the feature list EE's getInfo() would
+    return for an ImageCollection."""
+
+    @staticmethod
+    def _feature(image_id: str, time_start_ms: int, cloud_pct: float) -> dict:
+        return {
+            "id": image_id,
+            "properties": {"system:time_start": time_start_ms, "FIELD_CLOUD_PCT": cloud_pct},
+        }
+
+    def test_picks_most_recent_scene_under_threshold(self) -> None:
+        features = [
+            self._feature("old-clear", 1000, 5.0),
+            self._feature("new-clear", 3000, 10.0),
+            self._feature("newest-cloudy", 4000, 80.0),  # excluded: over threshold
+        ]
+
+        selected = EarthEngineClient._select_best_image(features)
+
+        assert selected["id"] == "new-clear"
+        assert selected["is_fallback"] is False
+
+    def test_falls_back_to_least_cloudy_when_none_under_threshold(self) -> None:
+        features = [
+            self._feature("cloudy-a", 1000, 90.0),
+            self._feature("cloudy-b", 2000, 45.0),  # least cloudy of the three
+            self._feature("cloudy-c", 3000, 99.0),
+        ]
+
+        selected = EarthEngineClient._select_best_image(features)
+
+        assert selected["id"] == "cloudy-b"
+        assert selected["is_fallback"] is True
+
+    def test_single_scene_under_threshold_is_selected(self) -> None:
+        features = [self._feature("only-one", 5000, 12.5)]
+
+        selected = EarthEngineClient._select_best_image(features)
+
+        assert selected["id"] == "only-one"
+        assert selected["is_fallback"] is False
+        assert selected["cloud_pct"] == 12.5
+
+    def test_boundary_cloud_pct_equal_to_threshold_is_excluded(self) -> None:
+        # ACCEPTABLE_CLOUD_PCT is 20.0 -- exactly 20.0 must NOT qualify (strict <).
+        features = [self._feature("borderline", 1000, eec.ACCEPTABLE_CLOUD_PCT)]
+
+        selected = EarthEngineClient._select_best_image(features)
+
+        assert selected["is_fallback"] is True
+
+
+def _configured_client_for_analysis() -> EarthEngineClient:
+    client = EarthEngineClient(project_id="fasal-setu-509721")
+    client.configured = True
+    return client
+
+
+class TestAnalyzeField:
+    """`_get_info` is EarthEngineClient's one boundary between EE-object
+    space and plain Python values, so these tests mock it directly (two
+    calls: the candidate-scene metadata list, then the final combined
+    stats dict) rather than trying to fully replicate EE's chained
+    Image/Reducer API on a MagicMock."""
+
+    async def test_raises_not_configured_without_touching_ee(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = EarthEngineClient(project_id=None)
+
+        with pytest.raises(EarthEngineNotConfiguredError):
+            await client.analyze_field({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        fake_ee.ImageCollection.assert_not_called()
+
+    async def test_raises_when_no_imagery_in_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value={"features": []}))
+
+        with pytest.raises(NoSentinelImageryAvailableError):
+            await client.analyze_field({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+    async def test_returns_parsed_result_from_selected_scene(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        candidates = {
+            "features": [
+                {
+                    "id": "COPERNICUS/S2_SR_HARMONIZED/old",
+                    "properties": {"system:time_start": 1000, "FIELD_CLOUD_PCT": 5.0},
+                },
+                {
+                    "id": "COPERNICUS/S2_SR_HARMONIZED/best",
+                    "properties": {"system:time_start": 2000, "FIELD_CLOUD_PCT": 8.3},
+                },
+            ]
+        }
+        combined_stats = {
+            "image_date": "2026-09-20",
+            "satellite": "Sentinel-2A",
+            "NDVI_mean": 0.65, "NDVI_min": 0.10, "NDVI_max": 0.90,
+            "NDWI_mean": -0.20, "NDWI_min": -0.50, "NDWI_max": 0.10,
+            "EVI_mean": 0.55, "EVI_min": 0.05, "EVI_max": 0.80,
+            "NDMI_mean": 0.30, "NDMI_min": -0.10, "NDMI_max": 0.60,
+            "healthy": 0.72, "moderate": 0.20, "stressed": 0.08,
+        }
+        monkeypatch.setattr(client, "_get_info", AsyncMock(side_effect=[candidates, combined_stats]))
+
+        result = await client.analyze_field({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        assert result.image_date == date(2026, 9, 20)
+        assert result.satellite == "S2A"
+        assert result.cloud_pct == 8.3
+        assert result.is_fallback is False
+        assert result.ndvi == eec.IndexStats(mean=0.65, min=0.10, max=0.90)
+        assert result.ndwi == eec.IndexStats(mean=-0.20, min=-0.50, max=0.10)
+        assert result.evi == eec.IndexStats(mean=0.55, min=0.05, max=0.80)
+        assert result.ndmi == eec.IndexStats(mean=0.30, min=-0.10, max=0.60)
+        assert result.healthy_pct == 72.0
+        assert result.moderate_pct == 20.0
+        assert result.stressed_pct == 8.0
+        fake_ee.Image.assert_called_once_with("COPERNICUS/S2_SR_HARMONIZED/best")
+
+    async def test_marks_fallback_when_only_cloudy_scenes_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        candidates = {
+            "features": [
+                {
+                    "id": "COPERNICUS/S2_SR_HARMONIZED/cloudy",
+                    "properties": {"system:time_start": 1000, "FIELD_CLOUD_PCT": 55.0},
+                },
+            ]
+        }
+        combined_stats = {
+            "image_date": "2026-09-01",
+            "satellite": "Sentinel-2B",
+            "NDVI_mean": 0.4, "NDVI_min": 0.0, "NDVI_max": 0.7,
+            "NDWI_mean": -0.1, "NDWI_min": -0.4, "NDWI_max": 0.2,
+            "EVI_mean": 0.3, "EVI_min": 0.0, "EVI_max": 0.5,
+            "NDMI_mean": 0.1, "NDMI_min": -0.2, "NDMI_max": 0.3,
+            "healthy": 0.3, "moderate": 0.4, "stressed": 0.3,
+        }
+        monkeypatch.setattr(client, "_get_info", AsyncMock(side_effect=[candidates, combined_stats]))
+
+        result = await client.analyze_field({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        assert result.is_fallback is True
+        assert result.satellite == "S2B"
+        assert result.cloud_pct == 55.0

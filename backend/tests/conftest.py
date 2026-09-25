@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models import Base
 from app.repositories.farm_repository import FarmRepository
+from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
 from app.services.farm_service import FarmService
@@ -48,3 +49,8 @@ def farm_repository(session: AsyncSession) -> FarmRepository:
 @pytest.fixture
 def farm_service(farm_repository: FarmRepository) -> FarmService:
     return FarmService(farm_repository)
+
+
+@pytest.fixture
+def satellite_repository(session: AsyncSession) -> SatelliteRepository:
+    return SatelliteRepository(session)
