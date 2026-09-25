@@ -55,20 +55,3 @@ class ProfileUpdateRequest(BaseModel):
     phone: str | None = Field(default=None, min_length=6, max_length=20)
     state: str | None = Field(default=None, min_length=1, max_length=100)
     location: str | None = Field(default=None, min_length=1, max_length=255)
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
-
-
-class ForgotPasswordResponse(BaseModel):
-    message: str
-    # Only populated when ENVIRONMENT=development and no real email service is
-    # configured — lets the frontend show the reset link directly instead of
-    # silently doing nothing. Never set outside local dev.
-    dev_reset_token: str | None = None
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str = Field(min_length=8)

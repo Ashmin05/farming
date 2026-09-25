@@ -158,11 +158,17 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   const accessToken = getAccessToken();
   if (!accessToken) return null;
 
-  const res = await fetch(`${API_ROOT}/auth/me`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) return null;
-  return res.json() as Promise<AuthUser>;
+  try {
+    const res = await fetch(`${API_ROOT}/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as AuthUser;
+  } catch {
+    // Network error (backend unreachable, CORS, etc.) — treat as "couldn't
+    // load", not "signed out", so callers don't get stuck forever.
+    return null;
+  }
 }
 
 export function logout(): void {
@@ -189,28 +195,3 @@ export async function updateProfile(update: ProfileUpdate): Promise<AuthUser> {
   return res.json() as Promise<AuthUser>;
 }
 
-export async function forgotPassword(email: string): Promise<{ message: string; devResetToken: string | null }> {
-  const res = await fetch(`${API_ROOT}/auth/forgot-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  if (!res.ok) {
-    const payload = await res.json().catch(() => null);
-    throw new AuthError(extractErrorMessage(payload, res.status));
-  }
-  const data = (await res.json()) as { message: string; dev_reset_token: string | null };
-  return { message: data.message, devResetToken: data.dev_reset_token };
-}
-
-export async function resetPassword(token: string, newPassword: string): Promise<void> {
-  const res = await fetch(`${API_ROOT}/auth/reset-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, new_password: newPassword }),
-  });
-  if (!res.ok) {
-    const payload = await res.json().catch(() => null);
-    throw new AuthError(extractErrorMessage(payload, res.status));
-  }
-}

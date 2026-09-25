@@ -5,8 +5,9 @@
 // ==============================================================================
 // Route URL: /register
 // App Router Entry: src/app/register/page.tsx
-// Description: Farmer registration onboarding page collecting name, mobile number,
-// state, primary supported crop, and preferred language (English, Bengali, Hindi).
+// Description: Simple farmer sign-up (name, email, password). Phone/state/
+// location aren't collected here — every new account is routed to /profile
+// right after signing up to fill those in (see auth flow docs in EXPLAIN.md).
 // ==============================================================================
 
 import Link from "next/link";
@@ -14,25 +15,16 @@ import { Sprout, ArrowRight, AlertCircle } from "lucide-react";
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { saveProfile } from "@/lib/stores/farmStore";
+import { saveProfile, getStoredProfile } from "@/lib/stores/farmStore";
 import { register, login, getCurrentUser, AuthError } from "@/lib/auth/auth-client";
 import GoogleSignInButton from "@/components/GoogleSignInButton";
-
-const languages = [
-  { code: "en", label: "English" },
-  { code: "bn", label: "বাংলা (Bengali)" },
-  { code: "hi", label: "हिंदी (Hindi)" },
-];
 
 const GOOGLE_ENABLED = Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
 
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [state, setState] = useState("Maharashtra");
-  const [lang, setLang] = useState("en");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -42,19 +34,13 @@ export default function RegisterPage() {
     setError(null);
     setSubmitting(true);
     try {
-      await register(email.trim(), password, name.trim() || undefined, {
-        phone: phone.trim() || undefined,
-        state,
-      });
+      await register(email.trim(), password, name.trim() || undefined);
       await login(email.trim(), password);
-      saveProfile({
-        name: name.trim() || "Farmer",
-        phone: phone.trim(),
-        state,
-        location: "",
-        preferredLanguage: lang,
-      });
-      router.push("/dashboard");
+      const existing = getStoredProfile();
+      saveProfile({ ...existing, name: name.trim() || existing.name });
+
+      const user = await getCurrentUser();
+      router.push(user && !user.profile_complete ? "/profile?complete=1" : "/dashboard");
     } catch (err) {
       setError(err instanceof AuthError ? err.message : "Something went wrong. Please try again.");
       setSubmitting(false);
@@ -63,15 +49,12 @@ export default function RegisterPage() {
 
   const handleGoogleSuccess = useCallback(async () => {
     const user = await getCurrentUser();
-    saveProfile({
-      name: user?.full_name?.trim() || "Farmer",
-      phone: phone.trim(),
-      state,
-      location: "",
-      preferredLanguage: lang,
-    });
+    if (user?.full_name) {
+      const existing = getStoredProfile();
+      saveProfile({ ...existing, name: user.full_name });
+    }
     router.push(user && !user.profile_complete ? "/profile?complete=1" : "/dashboard");
-  }, [router, phone, state, lang]);
+  }, [router]);
 
   const handleGoogleError = useCallback((message: string) => {
     setError(message);
@@ -79,7 +62,7 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-screen bg-farm-sand flex items-center justify-center p-4" data-theme="light">
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-sm">
         <Link href="/" className="flex items-center gap-2 justify-center mb-8">
           <div className="w-10 h-10 bg-farm-green rounded-xl flex items-center justify-center shadow-card">
             <Sprout className="w-5 h-5 text-white" strokeWidth={2.5} />
@@ -90,8 +73,11 @@ export default function RegisterPage() {
         </Link>
 
         <div className="bg-white rounded-2xl shadow-card border border-farm-border-color p-8">
-          <h1 className="text-2xl font-bold text-farm-dark mb-1">Create farmer account</h1>
-          <p className="text-farm-muted text-sm mb-6">Smart farming intelligence for your fields</p>
+          <h1 className="text-2xl font-bold text-farm-dark mb-1">Create your account</h1>
+          <p className="text-farm-muted text-sm mb-6">
+            Smart farming intelligence for your fields. You'll finish setting up your profile
+            (phone, state, etc.) right after this.
+          </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -110,26 +96,6 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="reg-phone">
-                Mobile Number
-              </label>
-              <div className="flex">
-                <span className="inline-flex items-center px-3 bg-farm-gray border border-r-0 border-farm-border-color rounded-l-lg text-farm-muted text-sm font-medium">
-                  +91
-                </span>
-                <input
-                  id="reg-phone"
-                  type="tel"
-                  required
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="9876543210"
-                  className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
-                />
-              </div>
-            </div>
-
-            <div>
               <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="reg-email">
                 Email
               </label>
@@ -142,47 +108,6 @@ export default function RegisterPage() {
                 placeholder="you@example.com"
                 className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green"
               />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="reg-state">
-                State
-              </label>
-              <select
-                id="reg-state"
-                value={state}
-                onChange={(e) => setState(e.target.value)}
-                className="w-full px-3 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white text-farm-dark font-medium"
-              >
-                {["Maharashtra", "Punjab", "Uttar Pradesh", "Madhya Pradesh", "Rajasthan", "Bihar", "Haryana", "West Bengal", "Odisha", "Gujarat"].map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-farm-dark mb-1.5">
-                Preferred Language
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {languages.map((item) => (
-                  <label
-                    key={item.code}
-                    className={`flex flex-col items-center justify-center p-2.5 border rounded-lg cursor-pointer text-center transition-all ${lang === item.code ? "border-farm-green bg-farm-green-light" : "border-farm-border-color hover:border-farm-green"
-                      }`}
-                  >
-                    <input
-                      type="radio"
-                      name="language"
-                      value={item.code}
-                      checked={lang === item.code}
-                      onChange={() => setLang(item.code)}
-                      className="sr-only"
-                    />
-                    <span className="text-xs font-semibold text-farm-dark">{item.label}</span>
-                  </label>
-                ))}
-              </div>
             </div>
 
             <div>

@@ -39,7 +39,22 @@ export default function DashboardPage() {
   if (!currentFarm) {
     return (
       <AppLayout>
-        <div className="p-12 text-center text-farm-muted">No farms found. Register your first farm in My Farms.</div>
+        <div className="max-w-md mx-auto text-center py-20 space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-farm-green-light flex items-center justify-center mx-auto">
+            <Sprout className="w-7 h-7 text-farm-green" />
+          </div>
+          <h2 className="text-xl font-bold text-farm-dark">No farms yet</h2>
+          <p className="text-farm-muted text-sm">
+            Register your first farm to see live satellite health, weather, and yield insights here.
+          </p>
+          <Link
+            href="/farms"
+            className="inline-flex items-center gap-2 bg-farm-green text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-farm-green-dark transition-all shadow-sm"
+          >
+            Register a Farm
+            <ChevronRight className="w-4 h-4" />
+          </Link>
+        </div>
       </AppLayout>
     );
   }
