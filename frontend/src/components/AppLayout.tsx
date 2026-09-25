@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -20,13 +21,28 @@ const nav = [
   { href: "/help", icon: HelpCircle, label: "Help" },
 ];
 
+const FADED_BG_ROUTES = ["/dashboard", "/farms", "/satellite", "/ai-chat"];
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { profile } = useUserStore();
+  const showFadedBg = FADED_BG_ROUTES.some((route) => pathname === route || pathname.startsWith(route + "/"));
 
   return (
     <div className="min-h-screen bg-farm-gray flex">
+      {showFadedBg && (
+        <div className="fixed inset-0 -z-10 pointer-events-none select-none">
+          <Image
+            src="/images/field_satellite.jpg"
+            alt=""
+            fill
+            priority
+            className="object-cover opacity-[0.28]"
+          />
+        </div>
+      )}
+
       {/* ── Sidebar ── */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-farm-border-color flex flex-col transition-transform duration-200 ${
@@ -100,7 +116,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {/* ── Main area ── */}
       <div className="flex-1 flex flex-col min-h-screen lg:ml-60">
         {/* Topbar */}
-        <header className="h-16 bg-white border-b border-farm-border-color flex items-center px-4 sm:px-6 gap-4 sticky top-0 z-20">
+        <header className="h-16 bg-white/90 backdrop-blur-sm border-b border-farm-border-color flex items-center px-4 sm:px-6 gap-4 sticky top-0 z-20">
           <button
             className="lg:hidden p-2 rounded-lg hover:bg-farm-green-light text-farm-dark transition-colors"
             onClick={() => setSidebarOpen(true)}
