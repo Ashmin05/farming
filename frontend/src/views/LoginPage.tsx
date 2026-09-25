@@ -13,7 +13,7 @@ import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Sprout, ArrowRight, Globe, AlertCircle } from "lucide-react";
-import { login, AuthError } from "@/lib/auth/auth-client";
+import { login, getCurrentUser, AuthError } from "@/lib/auth/auth-client";
 import GoogleSignInButton from "@/components/GoogleSignInButton";
 
 const languages = [
@@ -45,8 +45,9 @@ export default function LoginPage() {
     }
   }
 
-  const handleGoogleSuccess = useCallback(() => {
-    router.push("/dashboard");
+  const handleGoogleSuccess = useCallback(async () => {
+    const user = await getCurrentUser();
+    router.push(user && !user.profile_complete ? "/profile?complete=1" : "/dashboard");
   }, [router]);
 
   const handleGoogleError = useCallback((message: string) => {
@@ -134,9 +135,9 @@ export default function LoginPage() {
                 <input type="checkbox" className="rounded border-farm-border-color text-farm-green focus:ring-farm-green" />
                 Remember me
               </label>
-              <a href="#" className="text-sm text-farm-green hover:underline font-medium">
+              <Link href="/forgot-password" className="text-sm text-farm-green hover:underline font-medium">
                 Forgot password?
-              </a>
+              </Link>
             </div>
 
             {error && (

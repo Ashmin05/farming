@@ -18,8 +18,19 @@ export interface AuthUser {
   id: string;
   email: string;
   full_name: string | null;
+  phone: string | null;
+  state: string | null;
+  location: string | null;
   is_active: boolean;
   created_at: string;
+  profile_complete: boolean;
+}
+
+export interface ProfileUpdate {
+  full_name?: string;
+  phone?: string;
+  state?: string;
+  location?: string;
 }
 
 export interface AuthTokens {
@@ -101,12 +112,16 @@ export function getUserId(): string | null {
 export async function register(
   email: string,
   password: string,
-  fullName?: string
+  fullName?: string,
+  profile?: { phone?: string; state?: string; location?: string }
 ): Promise<AuthUser> {
   return authFetch<AuthUser>("/auth/register", {
     email,
     password,
     full_name: fullName ?? null,
+    phone: profile?.phone ?? null,
+    state: profile?.state ?? null,
+    location: profile?.location ?? null,
   });
 }
 
@@ -152,4 +167,50 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
 export function logout(): void {
   clearTokens();
+}
+
+export async function updateProfile(update: ProfileUpdate): Promise<AuthUser> {
+  const accessToken = getAccessToken();
+  if (!accessToken) throw new AuthError("Not signed in.");
+
+  const res = await fetch(`${API_ROOT}/auth/profile`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(update),
+  });
+
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new AuthError(extractErrorMessage(payload, res.status));
+  }
+  return res.json() as Promise<AuthUser>;
+}
+
+export async function forgotPassword(email: string): Promise<{ message: string; devResetToken: string | null }> {
+  const res = await fetch(`${API_ROOT}/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new AuthError(extractErrorMessage(payload, res.status));
+  }
+  const data = (await res.json()) as { message: string; dev_reset_token: string | null };
+  return { message: data.message, devResetToken: data.dev_reset_token };
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${API_ROOT}/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new AuthError(extractErrorMessage(payload, res.status));
+  }
 }

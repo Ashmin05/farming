@@ -5,7 +5,7 @@ import { useState } from "react";
 import {
   Sprout, LayoutDashboard, Map, Satellite, CloudRain,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
-  Bell
+  Bell, UserCircle
 } from "lucide-react";
 
 import { useUserStore } from "@/lib/stores/farmStore";
@@ -17,6 +17,7 @@ const nav = [
   { href: "/satellite", icon: Satellite, label: "Satellite" },
   { href: "/weather", icon: CloudRain, label: "Weather" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
+  { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
 ];
 
@@ -70,15 +71,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* User footer */}
         <div className="p-4 border-t border-farm-border-color">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded-full bg-farm-green flex items-center justify-center text-white text-xs font-bold uppercase">
+          <Link href="/profile" className="flex items-center gap-3 mb-3 group" onClick={() => setSidebarOpen(false)}>
+            <div className="w-8 h-8 rounded-full bg-farm-green flex items-center justify-center text-white text-xs font-bold uppercase flex-shrink-0">
               {profile.name ? profile.name.charAt(0) : "F"}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-farm-dark truncate">{profile.name || "Farmer Account"}</p>
+              <p className="text-sm font-semibold text-farm-dark truncate group-hover:text-farm-green transition-colors">{profile.name || "Farmer Account"}</p>
               <p className="text-xs text-farm-muted">{profile.state || "India"}</p>
             </div>
-          </div>
+          </Link>
           <Link
             href="/login"
             onClick={logout}

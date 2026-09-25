@@ -4,6 +4,7 @@ import jwt
 
 from app.core.security import (
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
     decode_token,
     hash_password,
@@ -12,6 +13,10 @@ from app.core.security import (
 from app.integrations.google_auth import GoogleTokenError, verify_google_id_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
+
+# Generic response for forgot-password so the endpoint never reveals whether
+# an email is registered (same anti-enumeration principle as login).
+FORGOT_PASSWORD_MESSAGE = "If an account exists for that email, a reset link has been sent."
 
 # Deliberately identical for "no such user" and "wrong password" so a login
 # failure never reveals whether the email is registered.
@@ -27,13 +32,25 @@ class AuthService:
         self.user_repository = user_repository
 
     async def register(
-        self, *, email: str, password: str, full_name: str | None = None
+        self,
+        *,
+        email: str,
+        password: str,
+        full_name: str | None = None,
+        phone: str | None = None,
+        state: str | None = None,
+        location: str | None = None,
     ) -> User:
         if await self.user_repository.get_by_email(email) is not None:
             raise AuthError("A user with this email already exists.")
-        return await self.user_repository.create(
+        user = await self.user_repository.create(
             email=email, hashed_password=hash_password(password), full_name=full_name
         )
+        if phone or state or location:
+            user = await self.user_repository.update_profile(
+                user, phone=phone, state=state, location=location
+            )
+        return user
 
     async def login(self, *, email: str, password: str) -> tuple[str, str]:
         user = await self.user_repository.get_by_email(email)
@@ -86,3 +103,40 @@ class AuthService:
             raise AuthError("Invalid or expired refresh token.")
 
         return create_access_token(str(user.id))
+
+    async def update_profile(
+        self,
+        user: User,
+        *,
+        full_name: str | None = None,
+        phone: str | None = None,
+        state: str | None = None,
+        location: str | None = None,
+    ) -> User:
+        return await self.user_repository.update_profile(
+            user, full_name=full_name, phone=phone, state=state, location=location
+        )
+
+    async def request_password_reset(self, email: str) -> str | None:
+        """Returns a reset token only for a real, password-capable account —
+        the caller decides whether/how to surface that (see the router: the
+        response to the client is always the same generic message)."""
+        user = await self.user_repository.get_by_email(email)
+        if user is None or not user.is_active:
+            return None
+        return create_password_reset_token(str(user.id))
+
+    async def reset_password(self, token: str, new_password: str) -> None:
+        try:
+            payload = decode_token(token)
+        except jwt.PyJWTError as exc:
+            raise AuthError("Invalid or expired reset link.") from exc
+
+        if payload.get("type") != "password_reset":
+            raise AuthError("Invalid or expired reset link.")
+
+        user = await self.user_repository.get_by_id(uuid.UUID(payload["sub"]))
+        if user is None or not user.is_active:
+            raise AuthError("Invalid or expired reset link.")
+
+        await self.user_repository.set_password(user, hash_password(new_password))

@@ -45,3 +45,30 @@ class UserRepository:
         await self.session.commit()
         await self.session.refresh(user)
         return user
+
+    async def update_profile(
+        self,
+        user: User,
+        *,
+        full_name: str | None = None,
+        phone: str | None = None,
+        state: str | None = None,
+        location: str | None = None,
+    ) -> User:
+        if full_name is not None:
+            user.full_name = full_name
+        if phone is not None:
+            user.phone = phone
+        if state is not None:
+            user.state = state
+        if location is not None:
+            user.location = location
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def set_password(self, user: User, hashed_password: str) -> User:
+        user.hashed_password = hashed_password
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
