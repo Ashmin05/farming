@@ -10,6 +10,7 @@
 // right after signing up to fill those in (see auth flow docs in EXPLAIN.md).
 // ==============================================================================
 
+import Image from "next/image";
 import Link from "next/link";
 import { Sprout, ArrowRight, AlertCircle } from "lucide-react";
 
@@ -61,18 +62,28 @@ export default function RegisterPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-farm-sand flex items-center justify-center p-4" data-theme="light">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden" data-theme="light">
+      {/* Background: a farmer using FasalSetu in the field, with a frosted-glass card floating over it */}
+      <Image
+        src="/images/field_satellite.jpg"
+        alt="Satellite-style aerial view of patchwork farmland"
+        fill
+        priority
+        className="object-cover"
+      />
+      <div className="absolute inset-0 bg-gradient-to-b from-farm-dark/25 via-transparent to-farm-dark/40" />
+
+      <div className="relative z-10 w-full max-w-sm">
         <Link href="/" className="flex items-center gap-2 justify-center mb-8">
           <div className="w-10 h-10 bg-farm-green rounded-xl flex items-center justify-center shadow-card">
             <Sprout className="w-5 h-5 text-white" strokeWidth={2.5} />
           </div>
-          <span className="font-bold text-2xl text-farm-dark">
-            Fasal<span className="text-farm-green">Setu</span>
+          <span className="font-bold text-2xl text-white drop-shadow-sm">
+            Fasal<span className="text-amber-300">Setu</span>
           </span>
         </Link>
 
-        <div className="bg-white rounded-2xl shadow-card border border-farm-border-color p-8">
+        <div className="bg-white/60 backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/40 p-8">
           <h1 className="text-2xl font-bold text-farm-dark mb-1">Create your account</h1>
           <p className="text-farm-muted text-sm mb-6">
             Smart farming intelligence for your fields. You'll finish setting up your profile
@@ -156,9 +167,9 @@ export default function RegisterPage() {
           )}
         </div>
 
-        <p className="text-center text-sm text-farm-muted mt-6">
+        <p className="text-center text-sm text-white/90 drop-shadow-sm mt-6">
           Already have an account?{" "}
-          <Link href="/login" className="text-farm-green font-semibold hover:underline">
+          <Link href="/login" className="text-amber-300 font-semibold hover:text-amber-200 hover:underline">
             Log in to Dashboard
           </Link>
         </p>
