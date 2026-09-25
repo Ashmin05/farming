@@ -4,7 +4,6 @@ import jwt
 
 from app.core.security import (
     create_access_token,
-    create_password_reset_token,
     create_refresh_token,
     decode_token,
     hash_password,
@@ -13,10 +12,6 @@ from app.core.security import (
 from app.integrations.google_auth import GoogleTokenError, verify_google_id_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
-
-# Generic response for forgot-password so the endpoint never reveals whether
-# an email is registered (same anti-enumeration principle as login).
-FORGOT_PASSWORD_MESSAGE = "If an account exists for that email, a reset link has been sent."
 
 # Deliberately identical for "no such user" and "wrong password" so a login
 # failure never reveals whether the email is registered.
@@ -116,27 +111,3 @@ class AuthService:
         return await self.user_repository.update_profile(
             user, full_name=full_name, phone=phone, state=state, location=location
         )
-
-    async def request_password_reset(self, email: str) -> str | None:
-        """Returns a reset token only for a real, password-capable account —
-        the caller decides whether/how to surface that (see the router: the
-        response to the client is always the same generic message)."""
-        user = await self.user_repository.get_by_email(email)
-        if user is None or not user.is_active:
-            return None
-        return create_password_reset_token(str(user.id))
-
-    async def reset_password(self, token: str, new_password: str) -> None:
-        try:
-            payload = decode_token(token)
-        except jwt.PyJWTError as exc:
-            raise AuthError("Invalid or expired reset link.") from exc
-
-        if payload.get("type") != "password_reset":
-            raise AuthError("Invalid or expired reset link.")
-
-        user = await self.user_repository.get_by_id(uuid.UUID(payload["sub"]))
-        if user is None or not user.is_active:
-            raise AuthError("Invalid or expired reset link.")
-
-        await self.user_repository.set_password(user, hash_password(new_password))

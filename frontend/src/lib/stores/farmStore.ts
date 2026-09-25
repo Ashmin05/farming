@@ -356,42 +356,9 @@ function scopedKey(base: string): string {
   return `${base}:${getUserId() ?? "guest"}`;
 }
 
-// Deterministic (non-cryptographic) string hash — used only to pick a demo
-// farm template per account, so the choice is stable across sessions for the
-// same user without needing to store anything server-side.
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  }
-  return h;
-}
-
-// Builds one demo farm for a brand-new account: a clone of one of the two
-// canonical templates (chosen deterministically per user, so it doesn't
-// change on refresh), lightly personalized with the farmer's own name/state
-// if they've set one. This is fake/demo data only — meant to give a new
-// account something to look at instead of a blank dashboard, without every
-// account showing the exact same identical farm(s) as every other account.
-function buildDemoFarmForUser(userId: string): Farm {
-  const template = DEFAULT_FARMS[hashString(userId) % DEFAULT_FARMS.length];
-  const profile = getStoredProfile();
-  const farmerName = profile.name && profile.name !== "Farmer" ? profile.name : null;
-  const stateOverride = profile.state && profile.state !== template.state ? profile.state : null;
-
-  return {
-    ...template,
-    id: `farm-demo-${userId.slice(0, 8)}`,
-    name: farmerName ? `${farmerName}'s ${template.crop} Farm` : template.name,
-    state: stateOverride ?? template.state,
-    address: stateOverride ? `${template.district}, ${stateOverride}` : template.address,
-  };
-}
-
 export function getStoredFarms(): Farm[] {
   if (typeof window === "undefined") return DEFAULT_FARMS;
-  const userId = getUserId();
-  const isGuest = userId === null;
+  const isGuest = getUserId() === null;
   try {
     const raw = localStorage.getItem(scopedKey(STORAGE_KEY_BASE));
     if (raw) {
@@ -401,11 +368,11 @@ export function getStoredFarms(): Farm[] {
   } catch (e) {
     console.error("Error reading farms from localStorage", e);
   }
-  // First visit for this identity: guests get the full canonical demo
-  // dataset (both farms). Real accounts get one demo farm of their own —
-  // distinct per account, not the identical shared guest dataset — just to
-  // give the dashboard something to show; they can add real farms from there.
-  return isGuest ? DEFAULT_FARMS : [buildDemoFarmForUser(userId)];
+  // First visit for this identity: guests browsing without an account get
+  // the canonical demo dataset to explore. A real, signed-in account never
+  // sees fabricated farm data — it starts empty until they register a real
+  // farm of their own.
+  return isGuest ? DEFAULT_FARMS : [];
 }
 
 export function saveFarms(farms: Farm[]): void {

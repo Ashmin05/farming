@@ -5,16 +5,17 @@
 // ==============================================================================
 // Route URL: /profile
 // Lets a signed-in farmer edit their name/phone/state/location. Email is
-// fixed (shown read-only) since it's the account identifier. Google-signup
-// accounts land here with an incomplete profile (no phone/state yet) and are
-// prompted to finish it before continuing to the dashboard.
+// fixed (shown read-only) since it's the account identifier. Every new
+// account (email/password or Google) lands here right after signing up with
+// an incomplete profile (no phone/state yet) and is prompted to finish it
+// before registering a farm.
 // ==============================================================================
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, AlertCircle, User as UserIcon } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
-import { getCurrentUser, updateProfile, AuthError, type AuthUser } from "@/lib/auth/auth-client";
+import { getCurrentUser, updateProfile, isAuthenticated, AuthError, type AuthUser } from "@/lib/auth/auth-client";
 import { saveProfile, getStoredProfile } from "@/lib/stores/farmStore";
 
 const states = [
@@ -25,7 +26,7 @@ const states = [
 export default function ProfilePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const justCompletedGoogle = searchParams.get("complete") === "1";
+  const completingSignup = searchParams.get("complete") === "1";
 
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,13 +35,23 @@ export default function ProfilePage() {
   const [state, setState] = useState("Maharashtra");
   const [location, setLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const loadUser = useCallback(async () => {
+    if (!isAuthenticated()) {
+      router.push("/login");
+      return;
+    }
+    setLoadError(false);
     const current = await getCurrentUser();
     if (!current) {
-      router.push("/login");
+      // Signed in (we have a token) but the request failed — a network
+      // hiccup or an expired/invalid token, not necessarily "not signed
+      // in". Show a retry instead of silently bouncing to /login.
+      setLoadError(true);
+      setLoading(false);
       return;
     }
     setUser(current);
@@ -80,6 +91,24 @@ export default function ProfilePage() {
     }
   }
 
+  if (loadError) {
+    return (
+      <AppLayout>
+        <div className="max-w-sm mx-auto p-12 text-center space-y-3">
+          <AlertCircle className="w-8 h-8 text-red-500 mx-auto" />
+          <p className="text-farm-dark font-medium">Couldn't load your profile.</p>
+          <p className="text-farm-muted text-sm">Check your connection and try again.</p>
+          <button
+            onClick={() => { setLoading(true); loadUser(); }}
+            className="inline-flex items-center gap-2 bg-farm-green text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-farm-green-dark transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
   if (loading || !user) {
     return (
       <AppLayout>
@@ -100,12 +129,12 @@ export default function ProfilePage() {
           </p>
         </div>
 
-        {justCompletedGoogle && !user.profile_complete && (
+        {completingSignup && !user.profile_complete && (
           <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
-              You signed in with Google — just a couple more details to finish setting up your account
-              (mobile number and state are required).
+              Just a couple more details to finish setting up your account — mobile number and
+              state are required before you can register a farm.
             </span>
           </div>
         )}

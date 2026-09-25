@@ -66,9 +66,3 @@ class UserRepository:
         await self.session.commit()
         await self.session.refresh(user)
         return user
-
-    async def set_password(self, user: User, hashed_password: str) -> User:
-        user.hashed_password = hashed_password
-        await self.session.commit()
-        await self.session.refresh(user)
-        return user

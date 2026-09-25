@@ -1,24 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.auth import (
-    ForgotPasswordRequest,
-    ForgotPasswordResponse,
     GoogleLoginRequest,
     ProfileUpdateRequest,
     RefreshTokenRequest,
-    ResetPasswordRequest,
     TokenResponse,
     UserLogin,
     UserRegister,
     UserResponse,
 )
-from app.services.auth_service import FORGOT_PASSWORD_MESSAGE, AuthError, AuthService
+from app.services.auth_service import AuthError, AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,30 +93,3 @@ async def update_profile(
         state=payload.state,
         location=payload.location,
     )
-
-
-@router.post("/forgot-password", response_model=ForgotPasswordResponse)
-async def forgot_password(
-    payload: ForgotPasswordRequest, auth_service: AuthService = Depends(get_auth_service)
-) -> ForgotPasswordResponse:
-    reset_token = await auth_service.request_password_reset(payload.email)
-    # Always the same response regardless of whether the account exists, so
-    # this endpoint can't be used to enumerate registered emails.
-    dev_token = None
-    if reset_token is not None and settings.ENVIRONMENT == "development":
-        # No email service is configured yet (see WEATHER_API_KEY-style
-        # integrations in app/integrations/ — there is no mailer). Surfacing
-        # the token here lets local dev/demo actually complete the reset
-        # flow instead of silently dead-ending. Never do this in production.
-        dev_token = reset_token
-    return ForgotPasswordResponse(message=FORGOT_PASSWORD_MESSAGE, dev_reset_token=dev_token)
-
-
-@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_password(
-    payload: ResetPasswordRequest, auth_service: AuthService = Depends(get_auth_service)
-) -> None:
-    try:
-        await auth_service.reset_password(payload.token, payload.new_password)
-    except AuthError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

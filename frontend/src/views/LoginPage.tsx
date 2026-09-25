@@ -130,16 +130,6 @@ export default function LoginPage() {
               />
             </div>
 
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-sm text-farm-muted cursor-pointer">
-                <input type="checkbox" className="rounded border-farm-border-color text-farm-green focus:ring-farm-green" />
-                Remember me
-              </label>
-              <Link href="/forgot-password" className="text-sm text-farm-green hover:underline font-medium">
-                Forgot password?
-              </Link>
-            </div>
-
             {error && (
               <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                 <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />

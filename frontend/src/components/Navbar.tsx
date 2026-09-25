@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { Menu, X, Sprout, LogIn, LayoutDashboard, Globe, ChevronDown } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Menu, X, Sprout, LogIn, LogOut, LayoutDashboard, Globe, ChevronDown } from "lucide-react";
 import { useLanguage, type Language } from "@/lib/LanguageContext";
+import { isAuthenticated, logout } from "@/lib/auth/auth-client";
 
 const LANGUAGES: { code: Language; label: string }[] = [
   { code: "en", label: "English" },
@@ -14,8 +15,21 @@ const LANGUAGES: { code: Language; label: string }[] = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [authed, setAuthed] = useState(false);
   const { lang: currentLang, setLang, t } = useLanguage();
+
+  useEffect(() => {
+    setAuthed(isAuthenticated());
+  }, [pathname]);
+
+  function handleSignOut() {
+    logout();
+    setAuthed(false);
+    setMobileOpen(false);
+    router.push("/login");
+  }
 
   const navLinks = [
     { href: "/", label: t.navHome },
@@ -39,14 +53,24 @@ export default function Navbar() {
               </span>
             </Link>
 
-            {/* Left-side Yellow Login Button */}
-            <Link
-              href="/login"
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-500 text-farm-dark transition-all duration-150 shadow-xs border border-amber-500/20"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-              {t.navLogin}
-            </Link>
+            {/* Left-side Login / Sign out button */}
+            {authed ? (
+              <button
+                onClick={handleSignOut}
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-farm-gray hover:bg-gray-200 text-farm-dark transition-all duration-150 shadow-xs border border-farm-border-color"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Sign out
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-500 text-farm-dark transition-all duration-150 shadow-xs border border-amber-500/20"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                {t.navLogin}
+              </Link>
+            )}
           </div>
 
           {/* Desktop Nav Links */}
@@ -100,14 +124,24 @@ export default function Navbar() {
 
           {/* Mobile toggle */}
           <div className="flex items-center gap-2 lg:hidden">
-            {/* Mobile quick yellow login */}
-            <Link
-              href="/login"
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-400 text-farm-dark"
-            >
-              <LogIn className="w-3 h-3" />
-              {t.navLogin}
-            </Link>
+            {/* Mobile quick login / sign out */}
+            {authed ? (
+              <button
+                onClick={handleSignOut}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-farm-gray text-farm-dark"
+              >
+                <LogOut className="w-3 h-3" />
+                Sign out
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-400 text-farm-dark"
+              >
+                <LogIn className="w-3 h-3" />
+                {t.navLogin}
+              </Link>
+            )}
 
             <button
               className="p-2 rounded-lg text-farm-dark hover:bg-farm-green-light transition-colors"
@@ -161,13 +195,22 @@ export default function Navbar() {
 
           {/* Mobile Auth & App Links */}
           <div className="pt-3 border-t border-farm-border-color grid grid-cols-2 gap-2">
-            <Link
-              href="/login"
-              onClick={() => setMobileOpen(false)}
-              className="flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold bg-amber-400 text-farm-dark rounded-lg hover:bg-amber-500 transition-all text-center shadow-xs"
-            >
-              <LogIn className="w-4 h-4" /> {t.navLogin}
-            </Link>
+            {authed ? (
+              <button
+                onClick={handleSignOut}
+                className="flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold bg-farm-gray text-farm-dark rounded-lg hover:bg-gray-200 transition-all text-center shadow-xs"
+              >
+                <LogOut className="w-4 h-4" /> Sign out
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold bg-amber-400 text-farm-dark rounded-lg hover:bg-amber-500 transition-all text-center shadow-xs"
+              >
+                <LogIn className="w-4 h-4" /> {t.navLogin}
+              </Link>
+            )}
             <Link
               href="/dashboard"
               onClick={() => setMobileOpen(false)}

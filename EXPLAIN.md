@@ -2,7 +2,7 @@
 
 This document explains what has been built so far: the overall idea, the frontend, the backend,
 the database, authentication, environment configuration, and what is real vs. mock data today.
-It reflects the state of the `profile_setup` branch.
+It reflects the state of the `profile_fixes` branch.
 
 ---
 
@@ -30,13 +30,14 @@ This is a single repo with the frontend and backend split across branches during
 
 | Branch | Contains |
 | :--- | :--- |
-| `main` | Merge target — currently equal to `backend` (frontend + backend scaffold), pushed to origin |
+| `main` | Merge target, pushed to origin. Includes all of `back_auth` and `profile_setup`'s work (JWT + Google auth, profile fields, per-account data isolation). Does **not** yet include `profile_fixes` (below). |
 | `frontend` | The Next.js app as it stood after initial UI buildout (map view, farm search, satellite panel) |
 | `backend` | Adds the FastAPI scaffold (layered structure, async SQLAlchemy, Alembic) on top of `frontend` |
-| `back_auth` | Branched from `backend`; adds the full JWT + Google auth system, wires the frontend Login/Register pages to it, fixes per-account data isolation, and turns on a real Google OAuth Client ID. Pushed to origin, not yet merged to `main`. |
-| `profile_setup` | **Current working branch.** Branched from `back_auth`; adds full profile fields (phone/state/location) to the User model and a `/profile` edit page, a profile-completion gate for Google signups, forgot/reset password, and per-account (not shared) demo farm data. Not yet pushed to origin or merged to `main`. |
+| `back_auth` | Adds the full JWT + Google auth system, wires the frontend Login/Register pages to it, fixes per-account data isolation, and turns on a real Google OAuth Client ID. Merged into `main`. |
+| `profile_setup` | Branched from `back_auth`; first pass at profile fields, a `/profile` edit page, forgot/reset password, and per-account demo farm data. Merged into `main`. |
+| `profile_fixes` | **Current working branch.** Branched from `main`; fixes a `/profile` infinite-loading bug, removes mock/demo data leaking into logged-in accounts, removes forgot/reset password and "Remember me" entirely (see §6.6), simplifies registration, and makes the public nav auth-aware. Not yet merged to `main`. |
 
-`back_auth` and `profile_setup` together hold all authentication and account-management work. Neither has been merged into `main` yet.
+`main` currently reflects `profile_setup`'s design. This document's "what's real" sections below describe `profile_fixes`, the latest state — some of what `profile_setup` added has since been **removed** again (forgot/reset password) or **changed** (demo data, registration flow); see §6.6/§6.7 and §10 for what to expect once this branch merges.
 
 ---
 
@@ -78,8 +79,6 @@ per the project's own convention (documented in each `page.tsx`).
 | Home | `/` | `HomePage.tsx` |
 | Login | `/login` | `LoginPage.tsx` |
 | Register | `/register` | `RegisterPage.tsx` |
-| Forgot Password | `/forgot-password` | `ForgotPasswordPage.tsx` |
-| Reset Password | `/reset-password?token=...` | `ResetPasswordPage.tsx` |
 | Dashboard | `/dashboard` | `DashboardPage.tsx` |
 | My Farms | `/farms` | `FarmsPage.tsx` |
 | Farm detail / Field detail | `/farms/[farmId]`, `/farms/[farmId]/fields/[fieldId]` | (in `src/app/farms/...`) |
@@ -91,8 +90,8 @@ per the project's own convention (documented in each `page.tsx`).
 | Help Center | `/help` | `HelpPage.tsx` |
 
 `AppLayout.tsx` provides the shared sidebar/nav shell for the logged-in app pages (Dashboard,
-Farms, Satellite, Weather, AI chat, Profile, Help). Login/Register/Forgot/Reset/Home are
-standalone, full-page layouts.
+Farms, Satellite, Weather, AI chat, Profile, Help). Login/Register/Home are standalone, full-page
+layouts using the public `Navbar.tsx` (Home) or their own minimal header (Login/Register).
 
 ### 4.2 Two separate data layers (important distinction)
 
@@ -135,20 +134,23 @@ The frontend actually has **two unrelated data systems**, which is a common poin
 - Both call `auth-client.ts` for real registration/login against the FastAPI backend (previously
   they didn't call any backend at all — Login was a plain `<form action="/dashboard" method="get">`
   and Register only wrote to `localStorage`).
-- Both collect email + password (min 8 characters, enforced both client-side via `minLength` and
-  server-side via pydantic).
+- **Register is intentionally minimal**: full name, email, password (min 8 characters, enforced
+  both client-side via `minLength` and server-side via pydantic) — no phone/state at signup time
+  anymore, that's collected right after on `/profile` (§6.6). Login is just email + password; no
+  "Remember me" (removed, was never wired to anything) and no "Forgot password?" link (feature was
+  built then removed entirely — §6.6).
 - Errors from the backend are shown inline (a duplicate-registration message, or the deliberately
   identical "Invalid email or password." for both "no such user" and "wrong password" on login —
   see §6.2).
 - A "Sign in with Google" button (`GoogleSignInButton.tsx`) is wired up on both pages, renders
   whenever `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is set, and is now **live** — see §6.5.
-- Register also now sends `phone`/`state` straight to the backend on signup (previously they
-  only ever reached `farmStore.ts` local storage, never the account itself — see §6.6).
-- On successful email/password register or login, tokens are stored and the user is redirected
-  to `/dashboard`. On Google sign-in, the redirect instead depends on profile completeness — an
-  incomplete Google account goes to `/profile?complete=1` first (§6.6).
-- Login's "Forgot password?" now links to `/forgot-password` (previously a dead `href="#"`).
-- "Sign out" (in `AppLayout.tsx`) clears the stored tokens.
+- On successful register or login (email/password *or* Google), the redirect depends on profile
+  completeness — an account without `phone`+`state` set goes to `/profile?complete=1` first;
+  otherwise straight to `/dashboard` (§6.6). This is the same rule for every signup method.
+- "Sign out" clears the stored tokens — available both in `AppLayout.tsx` (logged-in app pages)
+  and now in the public `Navbar.tsx` (Home/Weather/Features/etc.), which is auth-aware: it shows
+  "Sign out" instead of "Login" once a token is present, so a signed-in visitor never sees a
+  dead-end "Login" button on public pages.
 
 ---
 
@@ -177,7 +179,7 @@ backend/
 │   │   └── auth_service.py      # business logic: register/login/refresh/google login
 │   ├── routers/
 │   │   ├── health.py      # GET /health
-│   │   └── auth.py        # register/login/google/refresh/me + profile, forgot/reset-password
+│   │   └── auth.py        # register/login/google/refresh/me + profile
 │   └── main.py             # FastAPI app, CORS, router registration
 ├── alembic/                 # versioned DB migrations
 └── tests/                   # pytest suite (async, in-memory SQLite)
@@ -192,14 +194,12 @@ shapes, kept separate from the ORM models.
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
 | GET | `/health` | Liveness check |
-| POST | `/auth/register` | Create an account (email, password, optional full name) |
+| POST | `/auth/register` | Create an account (email, password, optional full name — `phone`/`state`/`location` are also accepted but unused by the frontend, see §6.6) |
 | POST | `/auth/login` | Exchange email/password for an access + refresh token pair |
 | POST | `/auth/google` | Exchange a Google ID token for an access + refresh token pair |
 | POST | `/auth/refresh` | Exchange a valid refresh token for a new access token |
 | GET | `/auth/me` | Return the current user (requires `Authorization: Bearer <access_token>`) |
 | PATCH | `/auth/profile` | Update the current user's `full_name`/`phone`/`state`/`location` (email is never editable here) |
-| POST | `/auth/forgot-password` | Request a password reset token for an email/password account (see §6.6) |
-| POST | `/auth/reset-password` | Exchange a valid reset token + new password for an updated password |
 
 Nothing else is implemented server-side yet — no `/farms`, `/fields`, `/satellite`, `/weather`,
 etc. Those all remain frontend-mock-only for now (§4.2).
@@ -314,73 +314,66 @@ now verifies real ID tokens (previously it would 401 with "Google sign-in is not
 this server." when the client ID was blank — that path is now inactive since a config value is
 set; an actually-invalid token instead gets `401 {"detail": "Invalid Google sign-in token."}`).
 
-### 6.6 Profile completion, editing, and forgot/reset password (`profile_setup` branch)
+### 6.6 Profile completion and editing (forgot/reset password was tried and removed)
 
-**Why this exists**: a Google sign-in only gives an account an email and a name — no phone number
-or state, which the rest of the app (dashboard greeting, farm defaults, etc.) expects. Email/
-password registration already collected phone/state in the UI, but never actually sent them to
-the backend (they only ever reached `farmStore.ts`'s browser-local storage). Both are now fixed
-via the same mechanism: `phone`/`state`/`location` live on the `User` row itself (§6.3), and
+**Why this exists**: neither a Google sign-in nor (now) email/password registration gives an
+account a phone number or state, which the rest of the app (dashboard greeting, farm defaults,
+etc.) expects. `phone`/`state`/`location` live on the `User` row itself (§6.3), and
 `UserResponse` exposes a computed `profile_complete` field (`true` once both `phone` and `state`
 are set — `location` is optional).
 
-**Registration** (`POST /auth/register`) now accepts optional `phone`/`state`/`location` and
-persists them immediately — so an email/password signup is `profile_complete` from the start.
+**Registration is deliberately minimal** (`RegisterPage.tsx`): just full name, email, and
+password. It no longer collects phone/state at signup time (an earlier version did) — that
+turned out to make the signup form noisier for no benefit, since the profile step right after
+covers it anyway. `POST /auth/register` still *accepts* optional `phone`/`state`/`location` for
+API flexibility, but the frontend never sends them, so every new account (Google or email/
+password alike) starts with `profile_complete: false`.
 
-**Google sign-in** still creates a user with only `email`/`full_name` (Google never gives you a
-phone number or state), so a first-time Google account is *not* `profile_complete`. The frontend
-checks this right after a successful Google sign-in (`getCurrentUser().profile_complete`) — both
-`LoginPage.tsx` and `RegisterPage.tsx`'s `handleGoogleSuccess` — and routes to `/profile?complete=1`
-instead of `/dashboard` when it's false, showing a banner explaining the account needs a couple
-more details. A returning Google user whose profile is already complete goes straight to
-`/dashboard` as before.
+**Every new account is routed to `/profile?complete=1` right after signing up** — both
+`LoginPage.tsx`'s and `RegisterPage.tsx`'s post-auth handlers check
+`getCurrentUser().profile_complete` and push to `/profile?complete=1` (showing a banner) instead
+of `/dashboard` when it's false. A returning user whose profile is already complete goes straight
+to `/dashboard` as before. This is intentionally the *same* gate for both signup methods now,
+not just Google — "simple login, then complete your profile, then register a farm" is the whole
+flow.
 
 **Editing a profile** (`/profile`, `ProfilePage.tsx`): a signed-in farmer can change their full
 name, phone, state, and location. **Email is always read-only** — shown disabled with an
 explanatory note — since it's the account's sign-in identifier; there is no "change email" flow.
 Saves go through `PATCH /auth/profile` (`get_current_user` dependency — must be signed in, always
 edits your own account, there's no user-id parameter to spoof) and are also mirrored into
-`farmStore.ts`'s local profile store so the dashboard greeting/sidebar/demo-farm naming (§6.7)
-stay in sync without a page reload.
+`farmStore.ts`'s local profile store so the dashboard greeting/sidebar stay in sync without a
+page reload.
 
-**Forgot / reset password** (`/forgot-password` → `/reset-password?token=...`):
-- `POST /auth/forgot-password` always returns the same generic message regardless of whether the
-  email is registered (same anti-enumeration principle as login, §6.2) — but no email is actually
-  sent, because **this project has no email-sending service configured** (there's no SMTP/mailer
-  in `app/integrations/`, unlike `WEATHER_API_KEY`/`SATELLITE_API_KEY`/`AI_API_KEY` which are at
-  least reserved for future clients). Real delivery is a known gap — see §10.
-- As a stand-in so the flow is actually testable/demoable end-to-end, when `ENVIRONMENT=development`
-  the response includes a `dev_reset_token` field; the frontend shows this as a clickable dev-only
-  link directly on the `/forgot-password` page, clearly labeled "Dev mode — no email service
-  configured." **This field is never populated outside development** (`settings.ENVIRONMENT` gate
-  in the router) — a production deployment must set `ENVIRONMENT=production` (or add a real mailer)
-  before this endpoint goes live, or resetting a password becomes impossible for users.
-- The reset token itself is a short-lived (30 min) JWT with `type: "password_reset"` — reusing the
-  existing `create_token`/`decode_token` helpers in `core/security.py` rather than a new DB table.
-  `POST /auth/reset-password` decodes it, checks the type claim, and calls `hash_password` +
-  `UserRepository.set_password`.
-- Verified end-to-end (backend `curl` + through the actual UI): register → forgot-password → follow
-  the dev reset link → set a new password → old password correctly rejected, new password logs in.
+`/profile` had a bug where it could get stuck on "Loading profile…" forever: `getCurrentUser()`
+threw on a network error instead of resolving, so the page's loading state never cleared. Fixed
+by having `getCurrentUser()` catch fetch failures and return `null`, and by having `ProfilePage`
+distinguish "not signed in at all" (`isAuthenticated()` false → redirect to `/login`) from
+"signed in but the request failed" (show a Retry button instead of redirecting or hanging).
 
-### 6.7 Per-account demo data (not identical across every account)
+**Forgot / reset password was built, then removed.** An earlier pass
+(`profile_setup`) added `/forgot-password` and `/reset-password` pages plus
+`POST /auth/forgot-password` / `POST /auth/reset-password` endpoints, using a short-lived JWT as
+the reset token since there was no real email service to send a link through — the dev-only
+version showed the reset link directly on screen. That whole feature (frontend pages, the
+"Forgot password?" link, and the backend endpoints/schemas/service methods) has since been
+**deleted outright** rather than kept disabled, because without real email delivery it wasn't
+usable and only added surface area. The **"Remember me" checkbox** was removed at the same time —
+it was UI-only and never actually did anything (tokens always persisted in `localStorage`
+regardless). If password reset is wanted again later, it needs a real email service from the
+start (see §10) rather than the dev-token workaround.
 
-Previously (documented in the `back_auth` version of this doc), every new real account started
-with **zero** farms — an intentional "don't show fabricated data" decision. That's been changed:
-every account (Google or email/password) that has no farms of their own now gets **one** fake demo
-farm to look at instead of a blank dashboard, generated from `buildDemoFarmForUser()` in
-`farmStore.ts`:
-- The template (one of the two canonical farms, §4.2B) is picked **deterministically per user id**
-  (a simple string hash, `hashString(userId) % DEFAULT_FARMS.length`) — stable across sessions for
-  the same account, but not guaranteed distinct between any two accounts, since there are currently
-  only two templates to choose from. A future improvement would be adding more templates so more
-  accounts diverge (see §10).
-- It's lightly personalized: renamed to `"<Farmer's Name>'s <Crop> Farm"` once they've set a name,
-  and its `state`/`address` are overridden to match the farmer's own selected state if it differs
-  from the template's.
-- **Guests (signed out) still see the full two-farm canonical demo set** — that behavior is
-  unchanged; this only affects what a *real, signed-in* account with no farms of its own sees.
-- This is still fake/demo data, not real farm data — it exists purely so new accounts have
-  something to explore; "Add your first farm" still works the normal way from there.
+### 6.7 Mock/demo data only shows for signed-out guests
+
+An earlier pass gave every new real account one auto-generated demo farm instead of an empty
+dashboard. That's been **reverted**: a real, signed-in account now always starts with zero farms
+— no fabricated data, ever — until they register one themselves via "Register a Farm" (which
+routes to `/farms`). Only **signed-out guests** browsing the app without an account see the
+canonical two-farm demo dataset (`DEFAULT_FARMS` in `farmStore.ts`), unchanged from the original
+design. This is enforced in `getStoredFarms()`: `isGuest ? DEFAULT_FARMS : []`.
+
+Dashboard/Satellite both show a proper empty state with a "Register a Farm" call-to-action when a
+real account has no farms yet, rather than a bare line of text.
 
 ---
 
@@ -396,7 +389,7 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend | Mapbox GL token for maps/field drawing |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Frontend | Google OAuth Client ID — blank disables the Google button |
 | `PORT` | Backend | Port uvicorn listens on |
-| `ENVIRONMENT` | Backend | `development` / `staging` / `production` — also gates whether `/auth/forgot-password` returns `dev_reset_token` (§6.6); never `development` in a real deployment |
+| `ENVIRONMENT` | Backend | `development` / `staging` / `production` |
 | `DATABASE_URL` | Backend | Async SQLAlchemy/Postgres connection string (`postgresql+asyncpg://...`) |
 | `FRONTEND_ORIGIN` | Backend | Sole allowed CORS origin |
 | `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | Backend | Reserved for future `app/integrations/` clients — unused today |
@@ -445,32 +438,29 @@ npm run dev    # http://localhost:3000
 | Register / Login / Refresh / `/auth/me` | ✅ Real — hits FastAPI, writes to Postgres, bcrypt + JWT |
 | Google Sign-In | ✅ Real — live with a configured Google OAuth Client ID, verified working end-to-end |
 | Profile editing (name/phone/state/location) | ✅ Real — `PATCH /auth/profile`, email fixed/read-only |
-| Google-signup profile completion gate | ✅ Real — routes to `/profile?complete=1` until phone+state are set |
-| Forgot / reset password | ✅ Real backend flow (JWT-based reset token) — ⚠️ no real email delivery; dev-only, see §6.6 |
+| Profile completion gate (all signup methods) | ✅ Real — routes to `/profile?complete=1` until phone+state are set |
 | Per-account data isolation | ✅ Real — localStorage namespaced by user id |
-| Per-account demo farm (not identical for every account) | ✅ Real — see §6.7; guests still see the full canonical demo set |
-| Farms / Fields / Satellite / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data; no backend endpoints exist yet |
+| Mock/demo farm data only for signed-out guests | ✅ Real — see §6.7; a real account always starts empty, no fabricated data |
+| Auth-aware public nav (Login vs. Sign out) | ✅ Real — `Navbar.tsx`, see §4.3 |
+| Farms / Fields / Satellite / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests only); no backend endpoints exist yet |
 | KrishiBot AI chat | ❌ Mock only — via `mock-client.ts` |
-| "Remember me" checkbox on login | ❌ UI only, not implemented (tokens always persist in localStorage regardless) |
+| Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
+| "Remember me" checkbox on login | ❌ Removed — was UI-only and never did anything |
 
 ---
 
 ## 10. Known gaps / natural next steps
 
-- Merge `back_auth` and `profile_setup` into `main` once reviewed.
+- Merge `profile_fixes` into `main` once reviewed.
 - Set a real `JWT_SECRET_KEY` before any non-local deployment.
 - Add the production frontend origin to the Google OAuth client's authorized origins before
   deploying (currently only `http://localhost:3000` is authorized).
-- **Add a real email service** (e.g. SES/SendGrid/Postmark) and wire it into
-  `request_password_reset` in `auth_service.py` so `/auth/forgot-password` actually emails the
-  reset link instead of relying on the dev-only `dev_reset_token` response field (§6.6). Also
-  confirm `ENVIRONMENT` is never `development` in any deployed environment, since that's what
-  currently gates that field.
+- **If password reset is wanted again**, don't resurrect the dev-token workaround — set up a real
+  email service (SES/SendGrid/Postmark) first, since that was the reason it got removed.
 - Build real backend endpoints for farms/fields/satellite/weather/yield, and a corresponding
   `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) — this is the largest remaining piece
   of backend work.
 - Add email verification (registration currently trusts any email address given).
-- Add more demo-farm templates (§6.7) — with only two templates, different accounts can land on
-  the same one; more variety would make per-account demo data feel more distinct.
 - Add authenticated route protection (currently `/dashboard` etc. are reachable without being
-  logged in — they just show demo/guest data instead of redirecting to `/login`).
+  logged in — they just show guest demo data instead of redirecting to `/login`; that's an
+  intentional "let people explore before signing up" choice today, but worth revisiting).
