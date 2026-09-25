@@ -32,7 +32,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className={`min-h-screen flex ${showFadedBg ? "" : "bg-farm-gray"}`}>
       {showFadedBg && (
-        <div className="fixed inset-0 -z-10 pointer-events-none select-none bg-farm-gray">
+        <div className="fixed inset-0 z-[1] pointer-events-none select-none bg-farm-gray">
           <Image
             src="/images/field_satellite.jpg"
             alt=""
