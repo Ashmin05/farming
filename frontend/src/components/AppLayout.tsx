@@ -21,27 +21,31 @@ const nav = [
   { href: "/help", icon: HelpCircle, label: "Help" },
 ];
 
+const FADED_BG_ROUTES = ["/dashboard", "/farms", "/satellite", "/ai-chat"];
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { profile } = useUserStore();
+  const showFadedBg = FADED_BG_ROUTES.some((route) => pathname === route || pathname.startsWith(route + "/"));
 
   return (
-    <div className="min-h-screen flex">
-      <div className="fixed inset-0 z-[1] pointer-events-none select-none bg-farm-gray">
-        <Image
-          src="/images/field_satellite.jpg"
-          alt=""
-          fill
-          priority
-          className="object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-white/35 via-white/25 to-white/45" />
-      </div>
+    <div className={`min-h-screen flex ${showFadedBg ? "" : "bg-farm-gray"}`}>
+      {showFadedBg && (
+        <div className="fixed inset-0 -z-10 pointer-events-none select-none bg-farm-gray">
+          <Image
+            src="/images/field_satellite.jpg"
+            alt=""
+            fill
+            priority
+            className="object-cover opacity-[0.35]"
+          />
+        </div>
+      )}
 
       {/* ── Sidebar ── */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-60 bg-white/85 backdrop-blur-md border-r border-farm-border-color flex flex-col transition-transform duration-200 ${
+        className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-farm-border-color flex flex-col transition-transform duration-200 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } lg:translate-x-0`}
       >
