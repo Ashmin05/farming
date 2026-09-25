@@ -30,15 +30,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const showFadedBg = FADED_BG_ROUTES.some((route) => pathname === route || pathname.startsWith(route + "/"));
 
   return (
-    <div className="min-h-screen bg-farm-gray flex">
+    <div className={`min-h-screen flex ${showFadedBg ? "" : "bg-farm-gray"}`}>
       {showFadedBg && (
-        <div className="fixed inset-0 -z-10 pointer-events-none select-none">
+        <div className="fixed inset-0 -z-10 pointer-events-none select-none bg-farm-gray">
           <Image
             src="/images/field_satellite.jpg"
             alt=""
             fill
             priority
-            className="object-cover opacity-[0.28]"
+            className="object-cover opacity-[0.35]"
           />
         </div>
       )}
