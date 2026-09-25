@@ -18,9 +18,16 @@ import AppLayout from "@/components/AppLayout";
 import { getCurrentUser, updateProfile, isAuthenticated, AuthError, type AuthUser } from "@/lib/auth/auth-client";
 import { saveProfile, getStoredProfile } from "@/lib/stores/farmStore";
 
+// All 28 Indian states + 8 union territories, alphabetical.
 const states = [
-  "Maharashtra", "Punjab", "Uttar Pradesh", "Madhya Pradesh", "Rajasthan",
-  "Bihar", "Haryana", "West Bengal", "Odisha", "Gujarat",
+  "Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam",
+  "Bihar", "Chandigarh", "Chhattisgarh",
+  "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Goa", "Gujarat",
+  "Haryana", "Himachal Pradesh", "Jammu and Kashmir", "Jharkhand", "Karnataka",
+  "Kerala", "Ladakh", "Lakshadweep", "Madhya Pradesh", "Maharashtra",
+  "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Puducherry",
+  "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura",
+  "Uttar Pradesh", "Uttarakhand", "West Bengal",
 ];
 
 export default function ProfilePage() {
