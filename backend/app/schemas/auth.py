@@ -8,7 +8,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     full_name: str | None = None
-    phone: str | None = Field(default=None, min_length=6, max_length=20)
+    phone: str | None = Field(default=None, pattern=r"^\d{10}$")
     state: str | None = Field(default=None, min_length=1, max_length=100)
     location: str | None = Field(default=None, min_length=1, max_length=255)
 
@@ -52,6 +52,6 @@ class TokenResponse(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
-    phone: str | None = Field(default=None, min_length=6, max_length=20)
+    phone: str | None = Field(default=None, pattern=r"^\d{10}$")
     state: str | None = Field(default=None, min_length=1, max_length=100)
     location: str | None = Field(default=None, min_length=1, max_length=255)

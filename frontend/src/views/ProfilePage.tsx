@@ -181,9 +181,13 @@ export default function ProfilePage() {
                 <input
                   id="profile-phone"
                   type="tel"
+                  inputMode="numeric"
                   required
+                  pattern="\d{10}"
+                  maxLength={10}
+                  title="Enter a 10-digit mobile number"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                   placeholder="9876543210"
                   className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
                 />
