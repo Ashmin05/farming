@@ -16,6 +16,10 @@ backend/.venv/
 backend/venv/
 *.pyc
 
+# Secrets — e.g. the Earth Engine service-account JSON key (see .env.example)
+secrets/*
+!secrets/README.md
+
 # Logs
 *.log
 
