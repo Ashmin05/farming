@@ -8,7 +8,9 @@ import jwt
 
 from app.core.config import settings
 
-TokenType = Literal["access", "refresh"]
+TokenType = Literal["access", "refresh", "password_reset"]
+
+PASSWORD_RESET_EXPIRE_MINUTES = 30
 
 
 def hash_password(password: str) -> str:
@@ -41,6 +43,12 @@ def create_access_token(subject: str) -> str:
 def create_refresh_token(subject: str) -> str:
     return create_token(
         subject, "refresh", timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    )
+
+
+def create_password_reset_token(subject: str) -> str:
+    return create_token(
+        subject, "password_reset", timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
     )
 
 

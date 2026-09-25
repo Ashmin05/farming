@@ -42,12 +42,16 @@ export default function RegisterPage() {
     setError(null);
     setSubmitting(true);
     try {
-      await register(email.trim(), password, name.trim() || undefined);
+      await register(email.trim(), password, name.trim() || undefined, {
+        phone: phone.trim() || undefined,
+        state,
+      });
       await login(email.trim(), password);
       saveProfile({
         name: name.trim() || "Farmer",
         phone: phone.trim(),
         state,
+        location: "",
         preferredLanguage: lang,
       });
       router.push("/dashboard");
@@ -63,9 +67,10 @@ export default function RegisterPage() {
       name: user?.full_name?.trim() || "Farmer",
       phone: phone.trim(),
       state,
+      location: "",
       preferredLanguage: lang,
     });
-    router.push("/dashboard");
+    router.push(user && !user.profile_complete ? "/profile?complete=1" : "/dashboard");
   }, [router, phone, state, lang]);
 
   const handleGoogleError = useCallback((message: string) => {
