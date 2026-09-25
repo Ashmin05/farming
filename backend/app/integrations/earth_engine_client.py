@@ -10,7 +10,8 @@ FastAPI event loop for every other request.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 import ee
 from google.auth import default as google_auth_default
@@ -18,6 +19,18 @@ from google.auth import default as google_auth_default
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
+FIELD_ANALYSIS_TIMEOUT_SECONDS = 60.0  # reduceRegion over a whole collection is slower than a count
+
+# Per-field Sentinel-2 analysis (see EarthEngineClient.analyze_field).
+FIELD_ANALYSIS_WINDOW_DAYS = 45
+ACCEPTABLE_CLOUD_PCT = 20.0
+REFLECTANCE_SCALE = 0.0001  # Sentinel-2 SR bands are Int16, scaled by 1e-4 to reflectance
+REGION_REDUCE_SCALE_M = 10  # native resolution of the visible/NIR S2 bands
+NDVI_HEALTHY_THRESHOLD = 0.6
+NDVI_STRESSED_THRESHOLD = 0.3
+# SCL (Scene Classification Layer) classes to mask out: cloud shadow (3),
+# cloud medium probability (8), cloud high probability (9), thin cirrus (10).
+SCL_CLOUD_SHADOW_CLASSES = [3, 8, 9, 10]
 
 # Roughly central India — used only by the health check to count recent
 # Sentinel-2 passes; the location itself has no other significance.
@@ -45,6 +58,47 @@ class EarthEngineNotConfiguredError(Exception):
 
 class EarthEngineTimeoutError(Exception):
     """Raised when a call to Earth Engine doesn't finish within the timeout."""
+
+
+class NoSentinelImageryAvailableError(Exception):
+    """Raised when no Sentinel-2 scene at all covers the field in the
+    analysis window (regardless of cloud cover) -- distinct from a timeout
+    or a missing credential."""
+
+
+@dataclass
+class IndexStats:
+    mean: float
+    min: float
+    max: float
+
+
+@dataclass
+class FieldAnalysisResult:
+    """Result of EarthEngineClient.analyze_field -- a real Sentinel-2
+    vegetation/moisture analysis over one farm's polygon."""
+
+    image_date: date
+    satellite: str  # "S2A" / "S2B"
+    cloud_pct: float  # cloud+shadow fraction over the FIELD itself, not the whole scene
+    is_fallback: bool  # True if no scene in the window was under ACCEPTABLE_CLOUD_PCT
+    ndvi: IndexStats
+    ndwi: IndexStats
+    evi: IndexStats
+    ndmi: IndexStats
+    healthy_pct: float  # % of field pixels with NDVI > NDVI_HEALTHY_THRESHOLD
+    moderate_pct: float  # % with NDVI_STRESSED_THRESHOLD <= NDVI <= NDVI_HEALTHY_THRESHOLD
+    stressed_pct: float  # % with NDVI < NDVI_STRESSED_THRESHOLD
+
+
+def _short_satellite_name(spacecraft_name: str | None) -> str:
+    if not spacecraft_name:
+        return "S2"
+    if "2A" in spacecraft_name:
+        return "S2A"
+    if "2B" in spacecraft_name:
+        return "S2B"
+    return spacecraft_name
 
 
 class EarthEngineClient:
@@ -169,6 +223,147 @@ class EarthEngineClient:
             .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
         )
         return await self._get_info(collection.size())
+
+    async def analyze_field(
+        self,
+        polygon_geojson: dict,
+        *,
+        days: int = FIELD_ANALYSIS_WINDOW_DAYS,
+    ) -> FieldAnalysisResult:
+        """Runs a real Sentinel-2 NDVI/NDWI/EVI/NDMI analysis over a farm's
+        polygon.
+
+        Picks the most recent scene in the last `days` days with under
+        ACCEPTABLE_CLOUD_PCT cloud+shadow cover *over the field itself* (not
+        the whole scene) -- falling back to the single least-cloudy scene in
+        the window (flagged via `is_fallback=True`) if none qualify. Raises
+        NoSentinelImageryAvailableError if the window has no Sentinel-2
+        coverage of the field at all.
+
+        Cloud/shadow masking uses the scene's SCL (Scene Classification
+        Layer) band rather than a COPERNICUS/S2_CLOUD_PROBABILITY join --
+        SCL ships on S2_SR_HARMONIZED itself, so this needs only one
+        collection and one image per candidate scene.
+        """
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+
+        geometry = ee.Geometry(polygon_geojson)
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+
+        collection = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(geometry)
+            .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        )
+
+        def _tag_field_cloud_pct(image):
+            scl = image.select("SCL")
+            is_cloudy = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [1] * len(SCL_CLOUD_SHADOW_CLASSES), 0)
+            cloud_fraction = (
+                is_cloudy.rename("cloud")
+                .reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=geometry,
+                    scale=REGION_REDUCE_SCALE_M,
+                    bestEffort=True,
+                )
+                .get("cloud")
+            )
+            return image.set("FIELD_CLOUD_PCT", ee.Number(cloud_fraction).multiply(100))
+
+        # select([]) drops pixel bands (properties are untouched) so this
+        # getInfo() call only pulls image metadata, not pixel data.
+        tagged = collection.map(_tag_field_cloud_pct)
+        candidates = await self._get_info(
+            tagged.select([]), timeout=FIELD_ANALYSIS_TIMEOUT_SECONDS
+        )
+        features = (candidates or {}).get("features", [])
+        if not features:
+            raise NoSentinelImageryAvailableError(
+                f"No Sentinel-2 imagery found for this field in the last {days} days."
+            )
+
+        selected = self._select_best_image(features)
+        image = ee.Image(selected["id"])
+
+        scl = image.select("SCL")
+        keep_mask = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [0] * len(SCL_CLOUD_SHADOW_CLASSES), 1)
+        masked = image.updateMask(keep_mask)
+        scaled = masked.select(["B2", "B3", "B4", "B8", "B11"]).multiply(REFLECTANCE_SCALE)
+
+        ndvi = scaled.normalizedDifference(["B8", "B4"]).rename("NDVI")
+        ndwi = scaled.normalizedDifference(["B3", "B8"]).rename("NDWI")
+        ndmi = scaled.normalizedDifference(["B8", "B11"]).rename("NDMI")
+        evi = scaled.expression(
+            "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
+            {"NIR": scaled.select("B8"), "RED": scaled.select("B4"), "BLUE": scaled.select("B2")},
+        ).rename("EVI")
+        indices = ndvi.addBands([ndwi, evi, ndmi])
+
+        stats_reducer = (
+            ee.Reducer.mean()
+            .combine(ee.Reducer.min(), sharedInputs=True)
+            .combine(ee.Reducer.max(), sharedInputs=True)
+        )
+        stats = indices.reduceRegion(
+            reducer=stats_reducer, geometry=geometry, scale=REGION_REDUCE_SCALE_M, bestEffort=True
+        )
+
+        classified = (
+            ndvi.gt(NDVI_HEALTHY_THRESHOLD)
+            .rename("healthy")
+            .addBands(
+                ndvi.gte(NDVI_STRESSED_THRESHOLD).And(ndvi.lte(NDVI_HEALTHY_THRESHOLD)).rename("moderate")
+            )
+            .addBands(ndvi.lt(NDVI_STRESSED_THRESHOLD).rename("stressed"))
+        )
+        classification = classified.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=geometry, scale=REGION_REDUCE_SCALE_M, bestEffort=True
+        )
+
+        combined = (
+            stats.combine(classification)
+            .set("image_date", image.date().format("YYYY-MM-dd"))
+            .set("satellite", image.get("SPACECRAFT_NAME"))
+        )
+        result = await self._get_info(combined, timeout=FIELD_ANALYSIS_TIMEOUT_SECONDS)
+
+        return FieldAnalysisResult(
+            image_date=datetime.strptime(result["image_date"], "%Y-%m-%d").date(),
+            satellite=_short_satellite_name(result.get("satellite")),
+            cloud_pct=round(selected["cloud_pct"], 1),
+            is_fallback=selected["is_fallback"],
+            ndvi=IndexStats(mean=result["NDVI_mean"], min=result["NDVI_min"], max=result["NDVI_max"]),
+            ndwi=IndexStats(mean=result["NDWI_mean"], min=result["NDWI_min"], max=result["NDWI_max"]),
+            evi=IndexStats(mean=result["EVI_mean"], min=result["EVI_min"], max=result["EVI_max"]),
+            ndmi=IndexStats(mean=result["NDMI_mean"], min=result["NDMI_min"], max=result["NDMI_max"]),
+            healthy_pct=round(result.get("healthy", 0.0) * 100, 1),
+            moderate_pct=round(result.get("moderate", 0.0) * 100, 1),
+            stressed_pct=round(result.get("stressed", 0.0) * 100, 1),
+        )
+
+    @staticmethod
+    def _select_best_image(features: list[dict]) -> dict:
+        """Picks the most recent scene under ACCEPTABLE_CLOUD_PCT field
+        cloud cover, or the single least-cloudy scene in the window if none
+        qualify (flagged as a fallback). Pure Python, no EE calls -- makes
+        the selection logic trivially unit-testable."""
+        parsed = [
+            {
+                "id": feature["id"],
+                "time_start": feature["properties"]["system:time_start"],
+                "cloud_pct": feature["properties"]["FIELD_CLOUD_PCT"],
+            }
+            for feature in features
+        ]
+        under_threshold = [p for p in parsed if p["cloud_pct"] < ACCEPTABLE_CLOUD_PCT]
+        if under_threshold:
+            best = max(under_threshold, key=lambda p: p["time_start"])
+            return {**best, "is_fallback": False}
+        best = min(parsed, key=lambda p: p["cloud_pct"])
+        return {**best, "is_fallback": True}
 
 
 def _build_client() -> EarthEngineClient:

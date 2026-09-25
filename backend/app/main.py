@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.integrations.earth_engine_client import earth_engine_client
-from app.routers import auth, farms, health
+from app.routers import auth, farms, health, satellite
 
 
 @asynccontextmanager
@@ -29,3 +29,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(farms.router)
+app.include_router(satellite.router)

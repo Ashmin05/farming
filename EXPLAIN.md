@@ -27,9 +27,9 @@ future geospatial work on field boundaries).
 ## 2. Repository / branch layout
 
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
-`profile_fixes`, `farm-backend`, `earth-engine`) were used during buildout and have all been
-merged into `main`, which is what's pushed to origin and described by this document. Notable
-merged work, roughly in order:
+`profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`) were used during buildout
+and have all been merged into `main`, which is what's pushed to origin and described by this
+document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
 - `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
@@ -40,6 +40,10 @@ merged work, roughly in order:
   frontend's localStorage-only mock store.
 - `earth-engine` — a Google Earth Engine client with a health-check endpoint (§5.5), the first
   step toward real satellite crop-health data.
+- `satellite-analysis` — the first real satellite analysis endpoint: live Sentinel-2 NDVI/NDWI/
+  EVI/NDMI per farm polygon, cached in a new `satellite_observations` table, with a 0–100 health
+  score and a background refresh triggered on farm creation (§5.6). Backend-only so far — see §9/§10
+  for what's left to wire into the frontend.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -194,30 +198,36 @@ backend/
 │   │   ├── database.py    # async SQLAlchemy engine + session + get_db() FastAPI dependency
 │   │   ├── security.py    # bcrypt hashing, JWT create/decode
 │   │   ├── deps.py        # get_current_user() FastAPI dependency (Bearer token → User)
-│   │   └── geometry.py    # farm polygon validation + area/centroid math (shapely + pyproj)
+│   │   ├── geometry.py    # farm polygon validation + area/centroid math (shapely + pyproj)
+│   │   └── satellite_health.py  # health-score math, EE-free and unit-testable (§5.6)
 │   ├── models/
 │   │   ├── base.py        # declarative Base (Alembic autogenerate target)
 │   │   ├── user.py        # User ORM model
-│   │   └── farm.py        # Farm ORM model
+│   │   ├── farm.py        # Farm ORM model
+│   │   └── satellite_observation.py  # SatelliteObservation ORM model (§5.6)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
-│   │   └── farm.py        # pydantic request/response models for /farms
+│   │   ├── farm.py        # pydantic request/response models for /farms
+│   │   └── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
-│   │   └── farm_repository.py   # DB queries for Farm, scoped to owner
+│   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
+│   │   └── satellite_repository.py  # DB queries for SatelliteObservation
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5)
+│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6)
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
-│   │   └── farm_service.py      # business logic: create/list/update/delete farms
+│   │   ├── farm_service.py      # business logic: create/list/update/delete farms
+│   │   └── satellite_service.py # business logic: run/cache a farm's satellite analysis
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
-│   │   └── farms.py       # farm CRUD, all scoped to the current user
+│   │   ├── farms.py       # farm CRUD, all scoped to the current user
+│   │   └── satellite.py   # satellite refresh/latest + the background-refresh helper (§5.6)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine startup init
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 37 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 68 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -242,9 +252,11 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | GET | `/farms/{farm_id}` | Get one farm — 404 (never 403) if it's not yours |
 | PATCH | `/farms/{farm_id}` | Update a farm — 404 if it's not yours |
 | DELETE | `/farms/{farm_id}` | Delete a farm — 404 if it's not yours |
+| POST | `/farms/{farm_id}/satellite/refresh` | Run a live Sentinel-2 analysis for this farm right now and cache the result (§5.6) |
+| GET | `/farms/{farm_id}/satellite/latest` | Read the most recently cached analysis — never calls Earth Engine; 404 if none exists yet (§5.6) |
 
-Still not implemented server-side: `/fields`, `/satellite` (analysis results), `/weather`,
-`/irrigation`, `/yield`, chat. Those remain frontend-mock-only for now (§4.2).
+Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
+remain frontend-mock-only for now (§4.2).
 
 ### 5.3 CORS
 
@@ -275,8 +287,7 @@ Farms used to live only in the frontend's localStorage. They're now real, backen
 
 ### 5.5 Google Earth Engine integration
 
-A first step toward real satellite crop-health data (today's satellite/NDVI numbers on
-Dashboard/Satellite are still synthetic — see §9):
+The connectivity layer that §5.6's real per-farm analysis is built on:
 
 - **`app/integrations/earth_engine_client.py`** wraps the `earthengine-api` SDK behind a small
   `EarthEngineClient` class that degrades gracefully instead of crashing the app — if Earth Engine
@@ -306,6 +317,80 @@ Dashboard/Satellite are still synthetic — see §9):
   reports `{configured, ok, auth_mode, image_count, latency_ms, detail}`. `ok: true` with a
   non-null `image_count` means it's genuinely connected, not just configured.
 - The client initializes once at FastAPI startup (`lifespan` in `app/main.py`), not per-request.
+
+### 5.6 Real per-farm satellite analysis (NDVI / NDWI / EVI / NDMI)
+
+Building on §5.4 (real farm polygons) and §5.5 (a working Earth Engine connection), this is the
+actual satellite crop-health analysis — not the health-check's trivial image count, a real
+per-field vegetation/moisture computation over a farm's own boundary.
+
+**`EarthEngineClient.analyze_field(polygon_geojson)`** (`app/integrations/earth_engine_client.py`):
+1. Converts the farm's GeoJSON polygon straight into an `ee.Geometry` and filters
+   `COPERNICUS/S2_SR_HARMONIZED` to it and the last 45 days.
+2. **Cloud/shadow masking uses the SCL (Scene Classification Layer) band** — S2_SR_HARMONIZED ships
+   it on every scene, so this needs only one collection, not a second
+   `COPERNICUS/S2_CLOUD_PROBABILITY` join. SCL classes 3 (cloud shadow), 8/9 (cloud medium/high
+   probability), and 10 (thin cirrus) are masked out.
+3. **Per-image field cloud %** is computed by reducing the cloud/shadow mask over the field's own
+   geometry (not the whole scene) — a scene can be mostly clear elsewhere but cloudy exactly over
+   this field, or vice versa, so the scene-level cloud metadata Sentinel-2 ships isn't good enough.
+4. **Scene selection**: the most recent scene with field cloud % under 20% is used. If none in the
+   45-day window qualifies, the single least-cloudy scene is used instead and the response is
+   flagged `is_fallback: true`. If the window has no Sentinel-2 coverage of the field at all,
+   `NoSentinelImageryAvailableError` is raised. This selection logic is pure Python (`EarthEngineClient._select_best_image`, unit-tested directly with plain dicts) — cloud % per scene still has to be
+   computed in Earth Engine, but *picking* the best one doesn't.
+5. **Indices**, all computed on reflectance-scaled bands (raw S2 SR bands are Int16, ×0.0001 to get
+   true reflectance):
+   - NDVI = normalizedDifference(B8, B4)
+   - NDWI = normalizedDifference(B3, B8)
+   - NDMI = normalizedDifference(B8, B11)
+   - EVI = `2.5 * (NIR − RED) / (NIR + 6·RED − 7.5·BLUE + 1)` via `.expression()`
+6. **Field statistics** (mean/min/max per index) come from one combined `reduceRegion` call
+   (`ee.Reducer.mean().combine(min).combine(max)`, `scale=10`, `bestEffort=True`).
+7. **Health classification**: the % of field pixels that are healthy (NDVI > 0.6), moderate
+   (0.3–0.6), or stressed (< 0.3), via three boolean bands reduced with `Reducer.mean()` (equivalent
+   to a per-class pixel fraction).
+8. All of the above — selection metadata plus final stats — costs exactly two `getInfo()` round
+   trips to Earth Engine per analysis, both wrapped in the same `asyncio.to_thread` +
+   `asyncio.wait_for` pattern as the health check (§5.5), just with a longer timeout (60s vs 20s)
+   since a `reduceRegion` over a whole collection is slower than a single count.
+
+**Health score** (`app/core/satellite_health.py` — deliberately Earth-Engine-free, so it's testable
+with plain numbers): a 0–100 score, 70% weighted on how the field's mean NDVI compares to a
+generic NDVI-by-growth-stage benchmark curve (`crop_stage_benchmark_ndvi(days_since_sowing)` —
+a rough, non-scientific piecewise curve, not crop-specific), 30% on how little of the field is in
+the stressed band. Exceeding the benchmark caps at 100% credit rather than overflowing the score.
+
+**`SatelliteService`** (`app/services/satellite_service.py`) ties it together:
+- `refresh_analysis(farm)` calls `analyze_field`, computes the health score, and stores a new
+  `SatelliteObservation` row — a real Earth Engine round trip, so this is the slower path.
+- `get_latest(farm)` is a cache-only read — never touches Earth Engine.
+- Earth Engine failures (`EarthEngineNotConfiguredError`, `EarthEngineTimeoutError`,
+  `NoSentinelImageryAvailableError`) are all wrapped as `SatelliteAnalysisError`, which the router
+  maps to `503 Service Unavailable`.
+
+**`satellite_observations` table** (`app/models/satellite_observation.py`,
+`49d07458618e_add_satellite_observations_table.py`): one row per analysis run — `farm_id` (FK,
+indexed), `image_date`, `satellite` ("S2A"/"S2B"), `cloud_pct`, `is_fallback`, flat `<index>_mean` /
+`_min` / `_max` columns for NDVI/NDWI/EVI/NDMI, `healthy_pct`/`moderate_pct`/`stressed_pct`,
+`health_score`, `source`, `created_at`. A farm accumulates a history; "latest" is just the most
+recent row by `created_at`, read via `GET /farms/{id}/satellite/latest`.
+
+**Every satellite API response carries provenance** — `{source: "Sentinel-2 via Earth Engine",
+is_live: true, as_of: <image_date>, cloud_pct}` — so a caller (or a reviewer) can tell at a glance
+that a number is real, dated satellite data and not a synthetic placeholder.
+
+**Background trigger**: `POST /farms` now schedules `run_background_refresh(farm.id)` as a FastAPI
+`BackgroundTask` right after a farm is created, so `/satellite/latest` usually isn't empty the
+first time a farmer opens the Satellite page. It runs in its own DB session (decoupled from the
+request that created the farm) and fails silently on error — a missing Earth Engine credential or
+no imagery yet just means `/satellite/latest` still 404s with a clear message until someone calls
+`/satellite/refresh` explicitly.
+
+**Not done yet**: no frontend wiring. `SatellitePage.tsx`/`DashboardPage.tsx` still show
+`enrichFarmDraft()`'s synthetic NDVI/canopy numbers (see §9) — this section is backend-only so far.
+Also not done: soil pH/N-P-K and weather stay synthetic (not satellite-derived at all); NDWI/EVI/NDMI
+are computed and stored but nothing surfaces them client-side yet either.
 
 ---
 
@@ -541,7 +626,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 37 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 68 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
 **Frontend**:
@@ -567,8 +652,10 @@ npm run dev    # http://localhost:3000
 | Auth-aware public nav (Login vs. Sign out) | ✅ Real — `Navbar.tsx`, see §4.3 |
 | KrishiBot AI chat requires sign-in | ✅ Real — see §6.8 |
 | Earth Engine connectivity | ✅ Real (when `GEE_PROJECT_ID` + ADC login are set up) — `/health/earth-engine` runs a live Sentinel-2 query; see §5.5 |
-| Per-farm satellite/NDVI/soil/water/weather/yield numbers shown on Dashboard/Satellite | ❌ Still synthetic — `enrichFarmDraft()` in `farmStore.ts` generates these client-side even for a real farm; Earth Engine is connected (above) but not yet wired to actually populate these numbers per farm |
-| Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms exist yet |
+| Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6. **Not yet wired into the frontend** (below) |
+| Per-farm satellite numbers shown on Dashboard/Satellite (frontend) | ❌ Still synthetic — `enrichFarmDraft()` in `farmStore.ts` generates these client-side even for a real farm; the real backend endpoint above exists but nothing on the frontend calls it yet |
+| Soil pH/N-P-K, weather | ❌ Mock only — not satellite-derived at all, need a different data source |
+| Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
 | "Remember me" checkbox on login | ❌ Removed — was UI-only and never did anything |
@@ -582,13 +669,16 @@ npm run dev    # http://localhost:3000
   deploying (currently only `http://localhost:3000` is authorized).
 - **If password reset is wanted again**, don't resurrect the dev-token workaround — set up a real
   email service (SES/SendGrid/Postmark) first, since that was the reason it got removed.
-- **Wire Earth Engine into the per-farm satellite numbers** — the client and health check are real
-  (§5.5), but Dashboard/Satellite's NDVI/canopy/moisture figures are still `enrichFarmDraft()`'s
-  synthetic data, not a real query against a farm's actual polygon. This is the natural next step
-  now that both farm geometry (§5.4) and Earth Engine connectivity (§5.5) exist independently.
+- **Wire the real satellite analysis (§5.6) into the frontend** — `POST/GET
+  /farms/{id}/satellite/*` exist and work, but `SatellitePage.tsx`/`DashboardPage.tsx` still read
+  `enrichFarmDraft()`'s synthetic NDVI/canopy numbers instead of calling them. This is the natural
+  next step now that the backend side is done.
+- **Surface NDWI/EVI/NDMI and the health score client-side** — computed and stored (§5.6) but
+  currently NDVI is the only index anything would plausibly show; NDWI (moisture) is the obvious
+  next one to add to the UI once the wiring above exists.
 - Build real backend endpoints for fields/weather/irrigation/yield, and a corresponding
-  `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the farms
-  API or Earth Engine.
+  `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the
+  farms/satellite API.
 - Add email verification (registration currently trusts any email address given).
 - Add authenticated route protection (currently `/dashboard` etc. are reachable without being
   logged in — they just show guest demo data instead of redirecting to `/login`; that's an
