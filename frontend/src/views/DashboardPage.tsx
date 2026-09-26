@@ -16,12 +16,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
-import { useFarmStore, useUserStore } from "@/lib/stores/farmStore";
+import { useFarmStore, useUserStore, applyLiveSatellite } from "@/lib/stores/farmStore";
+import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import {
   Satellite, Droplets, TrendingUp, AlertTriangle,
   ShieldCheck, Thermometer, Calendar, CheckCircle2,
   ChevronRight, ChevronDown, Sparkles, Brain, Newspaper, Wrench,
-  Calculator, Sprout, Leaf
+  Calculator, Sprout, Leaf, BadgeCheck
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -35,6 +36,10 @@ export default function DashboardPage() {
   const [calcCrop, setCalcCrop] = useState<string>("Onion");
 
   const currentFarm = farms.find((f) => f.id === selectedFarmId) || farms[0];
+  const { observation: satelliteObservation } = useFarmSatelliteAnalysis(currentFarm?.id);
+  const currentSatellite = currentFarm && satelliteObservation
+    ? applyLiveSatellite(currentFarm.satellite, satelliteObservation)
+    : currentFarm?.satellite;
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render an empty shell rather than
@@ -125,21 +130,28 @@ export default function DashboardPage() {
             {/* Status 1: Canopy Vigour */}
             <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-farm-muted">Crop Canopy Vigour</span>
+                <span className="text-xs font-medium text-farm-muted flex items-center gap-1">
+                  Crop Canopy Vigour
+                  {satelliteObservation && (
+                    <span title="Live Sentinel-2 data">
+                      <BadgeCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    </span>
+                  )}
+                </span>
                 <span className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
                   <Leaf className="w-4 h-4" />
                 </span>
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-extrabold text-farm-dark">
-                  NDVI {currentFarm.satellite.meanNdvi.toFixed(2)}
+                  NDVI {currentSatellite!.meanNdvi.toFixed(2)}
                 </span>
                 <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                  {currentFarm.satellite.canopyVigourLabel}
+                  {currentSatellite!.canopyVigourLabel}
                 </span>
               </div>
               <p className="text-xs text-farm-muted mt-2">
-                {currentFarm.satellite.healthyCanopyPercent}% healthy vegetative cover
+                {currentSatellite!.healthyCanopyPercent}% healthy vegetative cover
               </p>
             </div>
 

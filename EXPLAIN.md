@@ -27,9 +27,9 @@ future geospatial work on field boundaries).
 ## 2. Repository / branch layout
 
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
-`profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`) were used during buildout
-and have all been merged into `main`, which is what's pushed to origin and described by this
-document. Notable merged work, roughly in order:
+`profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`) were
+used during buildout and have all been merged into `main`, which is what's pushed to origin and
+described by this document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
 - `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
@@ -42,8 +42,11 @@ document. Notable merged work, roughly in order:
   step toward real satellite crop-health data.
 - `satellite-analysis` — the first real satellite analysis endpoint: live Sentinel-2 NDVI/NDWI/
   EVI/NDMI per farm polygon, cached in a new `satellite_observations` table, with a 0–100 health
-  score and a background refresh triggered on farm creation (§5.6). Backend-only so far — see §9/§10
-  for what's left to wire into the frontend.
+  score and a background refresh triggered on farm creation (§5.6).
+- `satellite-frontend` — wires that endpoint into the UI: real NDVI/canopy stats and a live-data
+  banner with a refresh button on the Satellite page and Dashboard, for real farms only (§5.7).
+  Found and fixed two real bugs along the way that only showed up against live Earth Engine data,
+  not the mocked tests (§5.7).
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -387,10 +390,56 @@ request that created the farm) and fails silently on error — a missing Earth E
 no imagery yet just means `/satellite/latest` still 404s with a clear message until someone calls
 `/satellite/refresh` explicitly.
 
-**Not done yet**: no frontend wiring. `SatellitePage.tsx`/`DashboardPage.tsx` still show
-`enrichFarmDraft()`'s synthetic NDVI/canopy numbers (see §9) — this section is backend-only so far.
-Also not done: soil pH/N-P-K and weather stay synthetic (not satellite-derived at all); NDWI/EVI/NDMI
-are computed and stored but nothing surfaces them client-side yet either.
+### 5.7 Frontend wiring for the real satellite analysis
+
+`SatellitePage.tsx` and `DashboardPage.tsx`'s "Crop Canopy Vigour" card now call the real API for
+real (backend-persisted) farms:
+
+- **`src/lib/api/satellite-client.ts`** — a thin client for `/farms/{id}/satellite/*`.
+  `getLatestSatelliteAnalysis()` returns `null` (not a throw) on a 404, since "no analysis yet" is
+  an expected, common state for a new farm.
+- **`src/lib/hooks/useFarmSatelliteAnalysis.ts`** — wraps that in TanStack Query, gated on whether
+  the farm id actually looks like a backend UUID (`isRealFarmId()`). Guest/demo farm ids
+  (`"farm-1"`, `"farm-<timestamp>"`) never hit the network at all — the hook is a deliberate no-op
+  for them, so no error, no loading state, nothing.
+- **`applyLiveSatellite()`** (`farmStore.ts`) overlays a real `SatelliteObservation` onto a farm's
+  synthetic `FarmSatellite` — but **only the current-stats fields** (NDVI/NDWI mean/min/max, canopy
+  health %, vigour label, mission/cloud/quality metadata). The historical trend graph and stress
+  zones stay synthetic, since the backend doesn't compute those yet, and are now explicitly labeled
+  **"Demo trend"** / **"Demo"** in the UI (`SatelliteAnalyticsPanel`'s `isLive` prop) so the mix of
+  real and demo data on one page is never presented as more real than it is.
+- The Satellite page shows a status banner for real farms: a loading state while checking,
+  "Live Sentinel-2 data · S2A/S2B · imaged \<date\> · \<cloud %\>%" (plus a fallback-scene note when
+  applicable) once an observation exists, or "No live analysis yet" with a **"Run Sentinel-2
+  Analysis"** button when it doesn't — the same button becomes **"Refresh from Sentinel-2"** once
+  data exists. Both call `POST /satellite/refresh` and update the cached query on success.
+- Cloud-cover and data-quality badges are computed from the real value instead of being hardcoded
+  ("Clear Sky" no longer shows for a 95% cloudy fallback scene, for example) — a bug caught during
+  live testing of this feature, not from the synthetic data path.
+
+**Two real bugs found and fixed during live end-to-end testing** (mocked EE tests didn't catch
+these, since they only exercise the `_get_info` boundary, not real Earth Engine semantics):
+1. `reduceRegion` includes every requested band as a key in its result **even when no pixels were
+   valid for it — with the value set to `null`, not the key omitted**. `dict.get(key, default)`
+   only substitutes a default for a *missing* key, so it silently does nothing for a
+   present-but-`null` value, and `ee.Number(null).multiply(...)` throws. Fixed with EE's
+   null-coalescing idiom, `ee.List([value, fallback]).reduce(ee.Reducer.firstNonNull())`, in
+   `_tag_field_cloud_pct` (treats "no data over the field for this scene" as maximally cloudy,
+   which correctly excludes it from selection). The same class of bug existed in the final
+   stats-parsing on the Python side (`result.get(key, 0.0)` doesn't rescue a JSON `null` either) —
+   fixed with an explicit `None` check.
+2. The hardcoded "(Clear Sky)" / "High Quality" labels in `SatelliteAnalyticsPanel` (fine for
+   synthetic data, which was always a low, fixed cloud %) are now computed from the actual value.
+
+### 5.8 What's still not done
+
+Soil pH/N-P-K and weather stay fully synthetic — not satellite-derived at all, would need either
+more Earth Engine layers (soil moisture is feasible; N-P-K is not remotely sensed) or a different
+data source entirely. NDWI/EVI/NDMI are computed and stored (§5.6) and now available via the API,
+but only NDVI and the canopy health % breakdown are currently surfaced in the UI (§5.7) — NDWI has
+a "Water" map layer button already in `SatelliteAnalyticsPanel` but it still shows the map, not a
+real moisture value breakdown card the way NDVI does. The historical NDVI trend graph and
+stress-zone detection remain synthetic for every farm, real or demo (§5.6/§5.7).
 
 ---
 
@@ -652,8 +701,9 @@ npm run dev    # http://localhost:3000
 | Auth-aware public nav (Login vs. Sign out) | ✅ Real — `Navbar.tsx`, see §4.3 |
 | KrishiBot AI chat requires sign-in | ✅ Real — see §6.8 |
 | Earth Engine connectivity | ✅ Real (when `GEE_PROJECT_ID` + ADC login are set up) — `/health/earth-engine` runs a live Sentinel-2 query; see §5.5 |
-| Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6. **Not yet wired into the frontend** (below) |
-| Per-farm satellite numbers shown on Dashboard/Satellite (frontend) | ❌ Still synthetic — `enrichFarmDraft()` in `farmStore.ts` generates these client-side even for a real farm; the real backend endpoint above exists but nothing on the frontend calls it yet |
+| Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6 |
+| Live NDVI/canopy % shown on Dashboard/Satellite for real farms | ✅ Real — `useFarmSatelliteAnalysis()` + `applyLiveSatellite()` overlay real current stats onto the UI, with a "Live Sentinel-2 data" banner and a refresh button; see §5.7. Guest/demo farms still show synthetic data, as they should (no real polygon to analyze) |
+| NDVI historical trend graph, stress-zone detection | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; see §5.7/§5.8 |
 | Soil pH/N-P-K, weather | ❌ Mock only — not satellite-derived at all, need a different data source |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
@@ -669,13 +719,14 @@ npm run dev    # http://localhost:3000
   deploying (currently only `http://localhost:3000` is authorized).
 - **If password reset is wanted again**, don't resurrect the dev-token workaround — set up a real
   email service (SES/SendGrid/Postmark) first, since that was the reason it got removed.
-- **Wire the real satellite analysis (§5.6) into the frontend** — `POST/GET
-  /farms/{id}/satellite/*` exist and work, but `SatellitePage.tsx`/`DashboardPage.tsx` still read
-  `enrichFarmDraft()`'s synthetic NDVI/canopy numbers instead of calling them. This is the natural
-  next step now that the backend side is done.
-- **Surface NDWI/EVI/NDMI and the health score client-side** — computed and stored (§5.6) but
-  currently NDVI is the only index anything would plausibly show; NDWI (moisture) is the obvious
-  next one to add to the UI once the wiring above exists.
+- **Surface NDWI/EVI/NDMI and the health score more prominently client-side** — computed, stored,
+  and returned by the API (§5.6), and the current-stats overlay already shows NDVI/NDWI/canopy %
+  (§5.7), but EVI/NDMI/health_score aren't shown anywhere in the UI yet.
+- **Build a real historical NDVI trend and real stress-zone detection** — the last remaining
+  synthetic pieces of the Satellite page (§5.8). Trend would need to store multiple observations
+  over time per farm (the table already supports this — `satellite_observations` isn't
+  overwritten, it accumulates) and query them by date range; stress zones would need per-pixel (not
+  just field-mean) NDVI data, which `reduceRegion` doesn't currently export.
 - Build real backend endpoints for fields/weather/irrigation/yield, and a corresponding
   `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the
   farms/satellite API.

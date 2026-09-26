@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
 import { getUserId } from "@/lib/auth/auth-client";
 import { listFarms, createFarm, deleteFarm, type BackendFarm } from "@/lib/api/farms-client";
+import type { SatelliteObservation } from "@/lib/api/satellite-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -204,6 +205,49 @@ export function enrichFarmDraft(id: string, draft: FarmDraft, areaAcres: number)
         dataQualityConfidence: 98.2,
         sunElevationAngle: "58°",
       },
+    },
+  };
+}
+
+// Overlays a real Sentinel-2 SatelliteObservation (backend/app/schemas/satellite.py)
+// onto a farm's synthetic FarmSatellite -- used wherever a real, signed-in
+// farm has a live analysis available (see useFarmSatelliteAnalysis.ts).
+// Only the "current stats" fields are real; `history` and `stressZones` stay
+// synthetic since the backend doesn't compute those yet (see EXPLAIN.md §5.6/§9)
+// -- callers should visibly label which parts of the panel are live vs. demo.
+export function applyLiveSatellite(base: FarmSatellite, observation: SatelliteObservation): FarmSatellite {
+  const missionLabel =
+    observation.satellite === "S2A"
+      ? "ESA Sentinel-2A L2A (Live)"
+      : observation.satellite === "S2B"
+        ? "ESA Sentinel-2B L2A (Live)"
+        : "ESA Sentinel-2 L2A (Live)";
+  const vigourLabel: FarmSatellite["canopyVigourLabel"] =
+    observation.health_score >= 80
+      ? "Excellent"
+      : observation.health_score >= 60
+        ? "Good"
+        : observation.health_score >= 40
+          ? "Fair"
+          : "Poor";
+
+  return {
+    ...base,
+    meanNdvi: observation.ndvi.mean,
+    minNdvi: observation.ndvi.min,
+    maxNdvi: observation.ndvi.max,
+    ndwi: observation.ndwi.mean,
+    canopyVigourLabel: vigourLabel,
+    healthyCanopyPercent: observation.healthy_pct,
+    moderateCanopyPercent: observation.moderate_pct,
+    stressedCanopyPercent: observation.stressed_pct,
+    metadata: {
+      satelliteMission: missionLabel,
+      acquisitionDate: observation.image_date,
+      cloudCoveragePercent: observation.cloud_pct,
+      spatialResolution: "10m Multispectral",
+      dataQualityConfidence: Math.round((100 - observation.cloud_pct) * 10) / 10,
+      sunElevationAngle: "—",
     },
   };
 }

@@ -28,6 +28,7 @@ export default function SatelliteAnalyticsPanel({
   satellite,
   activeLayer,
   onLayerChange,
+  isLive = false,
 }: {
   farmName: string;
   crop: string;
@@ -35,6 +36,11 @@ export default function SatelliteAnalyticsPanel({
   satellite: FarmSatellite;
   activeLayer: SatelliteMapLayer;
   onLayerChange: (layer: SatelliteMapLayer) => void;
+  /** True when `satellite`'s current stats (NDVI/NDWI/canopy %/metadata) came
+   * from a real Sentinel-2 analysis rather than demo data. The historical
+   * trend graph and stress zones below stay demo either way — flagged
+   * inline so the live badge above doesn't imply those are real too. */
+  isLive?: boolean;
 }) {
   const [selectedPointIdx, setSelectedPointIdx] = useState<number | null>(null);
 
@@ -183,8 +189,21 @@ export default function SatelliteAnalyticsPanel({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-sm">{satellite.metadata.satelliteMission}</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  {satellite.metadata.dataQualityConfidence}% High Quality
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    satellite.metadata.dataQualityConfidence >= 80
+                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                      : satellite.metadata.dataQualityConfidence >= 40
+                        ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                        : "bg-red-500/20 text-red-300 border-red-500/40"
+                  }`}
+                >
+                  {satellite.metadata.dataQualityConfidence}%{" "}
+                  {satellite.metadata.dataQualityConfidence >= 80
+                    ? "High Quality"
+                    : satellite.metadata.dataQualityConfidence >= 40
+                      ? "Moderate Quality"
+                      : "Low Quality (Cloudy)"}
                 </span>
               </div>
               <p className="text-xs text-white/70 mt-0.5">
@@ -196,7 +215,22 @@ export default function SatelliteAnalyticsPanel({
           <div className="flex items-center gap-4 text-xs">
             <div className="text-right">
               <p className="text-[10px] text-white/60">Cloud Cover</p>
-              <p className="font-bold text-emerald-400">{satellite.metadata.cloudCoveragePercent}% (Clear Sky)</p>
+              <p
+                className={`font-bold ${
+                  satellite.metadata.cloudCoveragePercent < 20
+                    ? "text-emerald-400"
+                    : satellite.metadata.cloudCoveragePercent < 60
+                      ? "text-amber-400"
+                      : "text-red-400"
+                }`}
+              >
+                {satellite.metadata.cloudCoveragePercent}%{" "}
+                {satellite.metadata.cloudCoveragePercent < 20
+                  ? "(Clear Sky)"
+                  : satellite.metadata.cloudCoveragePercent < 60
+                    ? "(Partly Cloudy)"
+                    : "(Heavy Cloud)"}
+              </p>
             </div>
             <div className="text-right border-l border-white/10 pl-4">
               <p className="text-[10px] text-white/60">Solar Elevation</p>
@@ -282,6 +316,11 @@ export default function SatelliteAnalyticsPanel({
             <h3 className="font-bold text-farm-dark text-sm flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-600" />
               NDVI Historical Season Progression Curve
+              {isLive && (
+                <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-farm-gray text-farm-muted normal-case">
+                  Demo trend
+                </span>
+              )}
             </h3>
             <p className="text-xs text-farm-muted">
               Bi-weekly Sentinel passes since sowing vs. regional optimal benchmark curve for {crop}
@@ -413,6 +452,11 @@ export default function SatelliteAnalyticsPanel({
             <h3 className="font-bold text-farm-dark text-sm flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               Detected Field Stress Zones
+              {isLive && (
+                <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-farm-gray text-farm-muted normal-case">
+                  Demo
+                </span>
+              )}
             </h3>
             <p className="text-xs text-farm-muted">Automated satellite anomaly classification per field segment</p>
           </div>
