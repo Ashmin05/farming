@@ -9,6 +9,14 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import { Layers, Trash2, Edit3, AlertCircle, X } from "lucide-react";
 
+export interface MapViewStressZone {
+  id: string;
+  type: string; // "water_stress" | "nutrient_pest_suspected"
+  areaHa: number;
+  geometry: GeoJSON.Geometry;
+  action: string;
+}
+
 export interface MapViewProps {
   onFieldDrawn?: (
     geojson: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null,
@@ -21,6 +29,12 @@ export interface MapViewProps {
   showDrawControls?: boolean;      // false = view-only map, no draw toolbar
   className?: string;
   height?: string | number;
+  /** XYZ tile URL template (e.g. an Earth Engine getMapId() tile_fetcher
+   * url_format) drawn as a raster overlay. Pass null/undefined to clear it. */
+  rasterTileUrl?: string | null;
+  /** Stress zone polygons drawn as a colored fill + outline, each with a
+   * click popup showing its type/area/suggested action. */
+  stressZones?: MapViewStressZone[];
 }
 
 function MapViewInner({
@@ -32,6 +46,8 @@ function MapViewInner({
   showDrawControls = true,
   className = "",
   height = "500px",
+  rasterTileUrl,
+  stressZones,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -260,6 +276,137 @@ function MapViewInner({
       map.once("load", fly);
     }
   }, [flyToCenter]);
+
+  // Raster overlay (e.g. an Earth Engine NDVI/NDWI/stress tile layer) —
+  // added/replaced without re-mounting the map whenever the tile URL changes.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const RASTER_SOURCE_ID = "ee-raster-source";
+    const RASTER_LAYER_ID = "ee-raster-layer";
+
+    const applyRaster = () => {
+      if (map.getLayer(RASTER_LAYER_ID)) map.removeLayer(RASTER_LAYER_ID);
+      if (map.getSource(RASTER_SOURCE_ID)) map.removeSource(RASTER_SOURCE_ID);
+      if (!rasterTileUrl) return;
+
+      map.addSource(RASTER_SOURCE_ID, {
+        type: "raster",
+        tiles: [rasterTileUrl],
+        tileSize: 256,
+      });
+      map.addLayer({
+        id: RASTER_LAYER_ID,
+        type: "raster",
+        source: RASTER_SOURCE_ID,
+        paint: { "raster-opacity": 0.85 },
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      applyRaster();
+    } else {
+      map.once("load", applyRaster);
+    }
+  }, [rasterTileUrl]);
+
+  // Stress zone polygons — colored by type, with a click popup. The click
+  // handler is stable across re-renders (it only reads data off the clicked
+  // feature itself, never a captured `stressZones` value), so it's safe to
+  // attach once per layer without leaking duplicate listeners.
+  const zoneClickHandlerRef = useRef<((e: mapboxgl.MapLayerMouseEvent) => void) | null>(null);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const ZONES_SOURCE_ID = "stress-zones-source";
+    const ZONES_FILL_LAYER_ID = "stress-zones-fill";
+    const ZONES_LINE_LAYER_ID = "stress-zones-outline";
+
+    const applyZones = () => {
+      if (zoneClickHandlerRef.current) {
+        map.off("click", ZONES_FILL_LAYER_ID, zoneClickHandlerRef.current);
+        zoneClickHandlerRef.current = null;
+      }
+      if (map.getLayer(ZONES_FILL_LAYER_ID)) map.removeLayer(ZONES_FILL_LAYER_ID);
+      if (map.getLayer(ZONES_LINE_LAYER_ID)) map.removeLayer(ZONES_LINE_LAYER_ID);
+      if (map.getSource(ZONES_SOURCE_ID)) map.removeSource(ZONES_SOURCE_ID);
+
+      if (!stressZones || stressZones.length === 0) return;
+
+      const featureCollection: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: stressZones.map((zone) => ({
+          type: "Feature",
+          geometry: zone.geometry,
+          properties: { id: zone.id, type: zone.type, areaHa: zone.areaHa, action: zone.action },
+        })),
+      };
+
+      map.addSource(ZONES_SOURCE_ID, { type: "geojson", data: featureCollection });
+      map.addLayer({
+        id: ZONES_FILL_LAYER_ID,
+        type: "fill",
+        source: ZONES_SOURCE_ID,
+        paint: {
+          "fill-color": [
+            "match", ["get", "type"],
+            "water_stress", "#0ea5e9",
+            "nutrient_pest_suspected", "#f97316",
+            "#ef4444",
+          ],
+          "fill-opacity": 0.35,
+        },
+      });
+      map.addLayer({
+        id: ZONES_LINE_LAYER_ID,
+        type: "line",
+        source: ZONES_SOURCE_ID,
+        paint: {
+          "line-color": [
+            "match", ["get", "type"],
+            "water_stress", "#0284c7",
+            "nutrient_pest_suspected", "#ea580c",
+            "#dc2626",
+          ],
+          "line-width": 2,
+        },
+      });
+
+      const handleClick = (e: mapboxgl.MapLayerMouseEvent) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        const props = feature.properties as { type: string; areaHa: number; action: string };
+        const label = props.type === "water_stress" ? "Water Stress" : "Nutrient/Pest Suspected";
+        new mapboxgl.Popup({ closeButton: true, maxWidth: "240px" })
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font-size:12px;line-height:1.5">
+              <strong>${label}</strong><br/>
+              Area: ${Number(props.areaHa).toFixed(2)} ha<br/>
+              <span style="color:#555">${props.action}</span>
+            </div>`
+          )
+          .addTo(map);
+      };
+      zoneClickHandlerRef.current = handleClick;
+      map.on("click", ZONES_FILL_LAYER_ID, handleClick);
+      map.on("mouseenter", ZONES_FILL_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", ZONES_FILL_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "";
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      applyZones();
+    } else {
+      map.once("load", applyZones);
+    }
+  }, [stressZones]);
 
   const handleStartDraw = () => {
     if (drawRef.current) {

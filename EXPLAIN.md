@@ -28,9 +28,9 @@ future geospatial work on field boundaries).
 
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
-`satellite-timeseries-alerts`) were used during buildout and have all been merged into `main`,
-which is what's pushed to origin and described by this document. Notable merged work, roughly in
-order:
+`satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`)
+were used during buildout and have all been merged into `main`, which is what's pushed to origin and
+described by this document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
 - `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
@@ -52,6 +52,16 @@ order:
   per-crop benchmark curves, a nightly APScheduler job that rebuilds every farm's timeseries and
   runs three anomaly-detection alert rules (NDVI drop, below-benchmark, water stress), and the
   endpoints to read both (§5.9). Backend-only so far, same as §5.6 before §5.7 existed.
+- `redesign-dashboard-satellite-ui` — full visual redesign of the Dashboard and Satellite pages to
+  match a new mockup: a greeting hero card, restructured stat/suggestion/harvest cards, a canopy
+  health donut chart, and a simplified layer-tab + map layout on the Satellite page. Presentation
+  only — no backend changes.
+- `satellite-map-tiles-stress-zones` — visualised Sentinel-2 map tiles (true colour, NDVI, NDWI,
+  EVI, stress classification) clipped to the farm polygon via `getMapId()`, cached with a 12h
+  expiry, plus per-pixel stress-zone vectorization (`reduceToVectors`) classified as water-stress
+  or nutrient/pest-suspected and stored with area + a suggested action (§5.10). Wired end-to-end:
+  the Satellite page's layer tabs now render the real raster overlay and stress-zone polygons on
+  the map, not synthetic data.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -216,36 +226,41 @@ backend/
 │   │   ├── farm.py        # Farm ORM model
 │   │   ├── satellite_observation.py  # SatelliteObservation ORM model (§5.6)
 │   │   ├── index_timeseries.py  # IndexTimeseriesPoint ORM model (§5.9)
-│   │   └── farm_alert.py  # FarmAlert ORM model (§5.9)
+│   │   ├── farm_alert.py  # FarmAlert ORM model (§5.9)
+│   │   ├── satellite_layer_set.py  # SatelliteLayerSet ORM model — cached tile URLs (§5.10)
+│   │   └── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
 │   │   ├── farm.py        # pydantic request/response models for /farms
 │   │   ├── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
-│   │   └── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
+│   │   ├── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
+│   │   └── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
 │   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
 │   │   ├── satellite_repository.py  # DB queries for SatelliteObservation
 │   │   ├── index_timeseries_repository.py  # DB queries for IndexTimeseriesPoint, incl. upsert
-│   │   └── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
+│   │   ├── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
+│   │   ├── satellite_layer_repository.py  # DB queries for SatelliteLayerSet, incl. upsert (§5.10)
+│   │   └── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9)
+│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10)
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
-│   │   └── satellite_service.py # business logic: analysis, timeseries, and alert rules
+│   │   └── satellite_service.py # business logic: analysis, timeseries, alert rules, map layers
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
-│   │   ├── satellite.py   # satellite refresh/latest/timeseries + the background-refresh helper
+│   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers + background-refresh helper
 │   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
 │   ├── jobs/
 │   │   └── scheduler.py   # APScheduler nightly job: refresh every farm's timeseries + alerts (§5.9)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 95 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 108 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -275,6 +290,7 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | GET | `/farms/{farm_id}/satellite/timeseries` | Read the farm's accumulated NDVI/NDWI/EVI history, oldest first — cache-only, built by the nightly job (§5.9) |
 | GET | `/farms/{farm_id}/alerts` | List detected anomalies for the farm (NDVI drop, below-benchmark, water stress), most recent first (§5.9) |
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
+| GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -508,6 +524,53 @@ anomalies automatically, instead of only ever showing "right now":
 - New dependency: **`apscheduler`** (added to `requirements.txt`).
 - Not yet wired into the frontend — same status as §5.6 was before §5.7 existed. `GET .../timeseries`
   and `GET .../alerts` are real, working endpoints, but nothing in the UI calls them yet.
+
+### 5.10 Map tiles (true colour / NDVI / NDWI / EVI / stress) and stress-zone vectorization
+
+Turns the single-scene stats from §5.6 into something visual: real Earth Engine imagery drawn on
+the farm's map, plus automatically detected stress zones instead of a synthetic overlay.
+
+- **`EarthEngineClient.get_field_map_layers(polygon, image_date)`**: finds the exact Sentinel-2
+  scene for `image_date`, builds five `ee.Image`s clipped to the farm polygon — true colour
+  (B4/B3/B2, `min:0 max:0.3`), NDVI (`min:0 max:0.9`, red→yellow→green), NDWI, EVI, and a
+  `stress_class` image built by `.where()`-chaining pixels below/above the field's
+  `mean − 1·stdDev` NDVI threshold — then calls `getMapId(vis_params)` on each and keeps
+  `tile_fetcher.url_format` (the XYZ tile URL template Mapbox/Leaflet can consume directly). All
+  five `getMapId` calls run concurrently via `asyncio.gather()`, since each is an independent
+  blocking SDK call wrapped in `asyncio.to_thread()`.
+- **Stress-zone vectorization**, in the same method: pixels with NDVI below `field mean − 1·stdDev`
+  are converted from a raster mask into polygons with `reduceToVectors` (scale 10m, min area
+  ~200m²), then each resulting zone is classified by its own mean NDWI — negative NDWI →
+  `water_stress`, otherwise → `nutrient_pest_suspected` — with a canned suggested action per type.
+  Zone geometry, area (via `ee.Geometry.area()`, converted to hectares), type, and action all come
+  back from **one** `getInfo()` call on the vectorized `FeatureCollection`, not one per zone.
+- **Caching**: `SatelliteLayerSet` (one row per farm+date, the 5 tile URLs + `expires_at`) and
+  `StressZone` (one row per detected zone) are both stored so repeat requests within ~12h don't
+  re-hit Earth Engine — `SatelliteService.get_or_build_layers()` checks `expires_at` and only
+  regenerates on a cache miss or expiry. Earth Engine tile URLs themselves expire, which is the
+  reason for the 12h window. Regenerating stress zones **replaces** the farm's prior zones for that
+  date (delete-then-insert in one repository call) rather than accumulating duplicates across
+  re-generations.
+- **`GET /farms/{id}/satellite/layers?date=`**: returns the 5 tile URLs, `generated_at`/`expires_at`,
+  and the stress zones (geometry as GeoJSON, area_ha, type, suggested action). `date` defaults to
+  the farm's latest cached `SatelliteObservation` date; 400s if there's no date and no prior
+  observation to default to.
+- **Frontend wiring** (`components/map/MapView.tsx`): two new props, `rasterTileUrl` (adds/replaces
+  a Mapbox raster source+layer pointing at the EE tile template whenever it changes, gated on
+  `map.isStyleLoaded()`/`map.once("load", …)` since the map only initialises once and never
+  remounts) and `stressZones` (a GeoJSON source + fill/outline layers colored by zone type, with a
+  click popup showing type/area/suggested action). `SatellitePage`'s existing layer tabs (NDVI /
+  NDWI / True Colour / Stress Zones) now select which cached tile URL to pass down, via
+  `useFarmSatelliteLayers()` (a `useFarmSatelliteAnalysis()`-style hook: no-op for guest/demo farm
+  ids, real farms get a React Query-cached fetch against `/satellite/layers`).
+- Live-verified: `GET .../layers` returns real Earth Engine tile URLs in ~8s on a cache miss;
+  spot-checking one tile URL directly returns a genuine small clipped PNG (the test farm is only
+  ~1 hectare, so its clipped tiles are correctly tiny — a handful of colored pixels against an
+  otherwise-transparent tile, invisible until zoomed into the farm itself). The same test farm's
+  heavy persistent cloud cover (§5.9's known limitation) means it has zero detected stress zones,
+  so zone polygon rendering + click popups are covered by the 7 backend unit tests in
+  `test_satellite_map_layers.py` rather than observed live end-to-end — same caveat as the nightly
+  scheduler in §10.
 
 ---
 
@@ -778,7 +841,9 @@ npm run dev    # http://localhost:3000
 | Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6 |
 | Live NDVI/canopy % shown on Dashboard/Satellite for real farms | ✅ Real — `useFarmSatelliteAnalysis()` + `applyLiveSatellite()` overlay real current stats onto the UI, with a "Live Sentinel-2 data" banner and a refresh button; see §5.7. Guest/demo farms still show synthetic data, as they should (no real polygon to analyze) |
 | NDVI/NDWI/EVI timeseries + automated alerts (backend) | ✅ Real — nightly `AsyncIOScheduler` job rebuilds every farm's history from Sentinel-2 and runs 3 alert rules (NDVI drop, below-benchmark, water stress); `GET .../timeseries` and `GET .../alerts` are real, working endpoints; see §5.9 |
-| NDVI historical trend graph, stress-zone detection (frontend) | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (above) but nothing in the UI calls it yet; see §5.7/§5.8/§5.9 |
+| NDVI historical trend graph | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (§5.9) but nothing in the UI calls it yet |
+| Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
+| Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Soil pH/N-P-K, weather | ❌ Mock only — not satellite-derived at all, need a different data source |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
@@ -804,10 +869,10 @@ npm run dev    # http://localhost:3000
 - **Surface `/farms/{id}/alerts` in the UI** — real alerts are generated nightly (§5.9) but nothing
   shows them to a farmer yet; a notification badge/list on Dashboard or Satellite would use this
   directly.
-- **Real stress-zone detection** — the one piece of §5.6/§5.7/§5.8's "still synthetic" list without
-  a backend counterpart yet. Would need per-pixel (not just field-mean) NDVI data, which
-  `reduceRegion` doesn't currently export — a genuinely new piece of Earth Engine work, not just
-  frontend wiring like the two bullets above.
+- **Verify stress-zone rendering against a farm with real detected zones** — the test farm used for
+  live verification has persistent heavy cloud cover (below) and detects zero stress zones, so the
+  zone polygon fill/outline/click-popup code path (§5.10) is covered by unit tests only, not
+  observed live end-to-end yet.
 - **Verify the nightly scheduler job against farms with real historical cloud-free passes** — the
   alert rules (§5.9) are covered by 13 unit tests against a mocked `EarthEngineClient`, and the
   live Earth Engine integration itself was verified end-to-end, but the *combination* (a real farm

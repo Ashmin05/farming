@@ -8,7 +8,9 @@ from app.models import Base
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
+from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
+from app.repositories.stress_zone_repository import StressZoneRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
 from app.services.farm_service import FarmService
@@ -66,3 +68,13 @@ def index_timeseries_repository(session: AsyncSession) -> IndexTimeseriesReposit
 @pytest.fixture
 def farm_alert_repository(session: AsyncSession) -> FarmAlertRepository:
     return FarmAlertRepository(session)
+
+
+@pytest.fixture
+def satellite_layer_repository(session: AsyncSession) -> SatelliteLayerRepository:
+    return SatelliteLayerRepository(session)
+
+
+@pytest.fixture
+def stress_zone_repository(session: AsyncSession) -> StressZoneRepository:
+    return StressZoneRepository(session)
