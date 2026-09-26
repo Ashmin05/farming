@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
 FIELD_ANALYSIS_TIMEOUT_SECONDS = 60.0  # reduceRegion over a whole collection is slower than a count
+TIMESERIES_TIMEOUT_SECONDS = 120.0  # up to ~120 days of scenes, two reduceRegions each
 
 # Per-field Sentinel-2 analysis (see EarthEngineClient.analyze_field).
 FIELD_ANALYSIS_WINDOW_DAYS = 45
@@ -89,6 +90,20 @@ class FieldAnalysisResult:
     healthy_pct: float  # % of field pixels with NDVI > NDVI_HEALTHY_THRESHOLD
     moderate_pct: float  # % with NDVI_STRESSED_THRESHOLD <= NDVI <= NDVI_HEALTHY_THRESHOLD
     stressed_pct: float  # % with NDVI < NDVI_STRESSED_THRESHOLD
+
+
+@dataclass
+class TimeseriesPoint:
+    """One scene's field-mean indices, from EarthEngineClient.build_field_timeseries.
+    Unlike FieldAnalysisResult this carries no selection/classification --
+    just raw per-scene numbers, for SatelliteService to filter and store."""
+
+    image_date: date
+    satellite: str
+    cloud_pct: float
+    ndvi_mean: float
+    ndwi_mean: float
+    evi_mean: float
 
 
 def _short_satellite_name(spacecraft_name: str | None) -> str:
@@ -388,6 +403,93 @@ class EarthEngineClient:
             return {**best, "is_fallback": False}
         best = min(parsed, key=lambda p: p["cloud_pct"])
         return {**best, "is_fallback": True}
+
+    async def build_field_timeseries(
+        self, polygon_geojson: dict, *, start: date, end: date
+    ) -> list[TimeseriesPoint]:
+        """Returns one TimeseriesPoint per Sentinel-2 scene covering the
+        field between `start` and `end` (inclusive), regardless of cloud
+        cover -- callers (SatelliteService) filter by cloud_pct themselves.
+
+        Computes NDVI/NDWI/EVI and field cloud % for *every* candidate scene
+        in a single `.map()` over the collection, then a single `getInfo()`
+        call -- never one Earth Engine round trip per scene. This is the
+        same principle as analyze_field's scene-selection step, just
+        computing full stats for every scene instead of picking just one.
+        """
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+
+        geometry = ee.Geometry(polygon_geojson)
+        collection = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(geometry)
+            .filterDate(start.strftime("%Y-%m-%d"), (end + timedelta(days=1)).strftime("%Y-%m-%d"))
+        )
+
+        def _tag_indices_and_cloud(image):
+            scl = image.select("SCL")
+            keep_mask = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [0] * len(SCL_CLOUD_SHADOW_CLASSES), 1)
+            is_cloudy = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [1] * len(SCL_CLOUD_SHADOW_CLASSES), 0)
+
+            masked = image.updateMask(keep_mask)
+            scaled = masked.select(["B2", "B3", "B4", "B8"]).multiply(REFLECTANCE_SCALE)
+            ndvi = scaled.normalizedDifference(["B8", "B4"]).rename("NDVI")
+            ndwi = scaled.normalizedDifference(["B3", "B8"]).rename("NDWI")
+            evi = scaled.expression(
+                "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
+                {"NIR": scaled.select("B8"), "RED": scaled.select("B4"), "BLUE": scaled.select("B2")},
+            ).rename("EVI")
+            index_stats = ndvi.addBands([ndwi, evi]).reduceRegion(
+                reducer=ee.Reducer.mean(), geometry=geometry, scale=REGION_REDUCE_SCALE_M, bestEffort=True
+            )
+
+            raw_cloud_fraction = (
+                is_cloudy.rename("cloud")
+                .reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=geometry,
+                    scale=REGION_REDUCE_SCALE_M,
+                    bestEffort=True,
+                )
+                .get("cloud")
+            )
+            # See analyze_field's _tag_field_cloud_pct for why this null-coalesce
+            # is needed: reduceRegion always includes the key, just with a null
+            # value, when the field has zero valid pixels for this scene.
+            cloud_fraction = ee.List([raw_cloud_fraction, 1]).reduce(ee.Reducer.firstNonNull())
+
+            return (
+                image.set(index_stats)
+                .set("TS_CLOUD_PCT", ee.Number(cloud_fraction).multiply(100))
+                .set("TS_IMAGE_DATE", image.date().format("YYYY-MM-dd"))
+                .set("TS_SATELLITE", image.get("SPACECRAFT_NAME"))
+            )
+
+        tagged = collection.map(_tag_indices_and_cloud)
+        raw = await self._get_info(tagged.select([]), timeout=TIMESERIES_TIMEOUT_SECONDS)
+        features = (raw or {}).get("features", [])
+
+        points: list[TimeseriesPoint] = []
+        for feature in features:
+            props = feature.get("properties", {})
+            image_date_str = props.get("TS_IMAGE_DATE")
+            ndvi_mean = props.get("NDVI")
+            cloud_pct = props.get("TS_CLOUD_PCT")
+            if image_date_str is None or ndvi_mean is None or cloud_pct is None:
+                continue
+            points.append(
+                TimeseriesPoint(
+                    image_date=datetime.strptime(image_date_str, "%Y-%m-%d").date(),
+                    satellite=_short_satellite_name(props.get("TS_SATELLITE")),
+                    cloud_pct=round(cloud_pct, 1),
+                    ndvi_mean=ndvi_mean,
+                    ndwi_mean=props.get("NDWI") or 0.0,
+                    evi_mean=props.get("EVI") or 0.0,
+                )
+            )
+        points.sort(key=lambda p: p.image_date)
+        return points
 
 
 def _build_client() -> EarthEngineClient:

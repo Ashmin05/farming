@@ -27,9 +27,10 @@ future geospatial work on field boundaries).
 ## 2. Repository / branch layout
 
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
-`profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`) were
-used during buildout and have all been merged into `main`, which is what's pushed to origin and
-described by this document. Notable merged work, roughly in order:
+`profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
+`satellite-timeseries-alerts`) were used during buildout and have all been merged into `main`,
+which is what's pushed to origin and described by this document. Notable merged work, roughly in
+order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
 - `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
@@ -47,6 +48,10 @@ described by this document. Notable merged work, roughly in order:
   banner with a refresh button on the Satellite page and Dashboard, for real farms only (§5.7).
   Found and fixed two real bugs along the way that only showed up against live Earth Engine data,
   not the mocked tests (§5.7).
+- `satellite-timeseries-alerts` — tracks a farm's NDVI/NDWI/EVI *history* (not just "right now"):
+  per-crop benchmark curves, a nightly APScheduler job that rebuilds every farm's timeseries and
+  runs three anomaly-detection alert rules (NDVI drop, below-benchmark, water stress), and the
+  endpoints to read both (§5.9). Backend-only so far, same as §5.6 before §5.7 existed.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -202,35 +207,45 @@ backend/
 │   │   ├── security.py    # bcrypt hashing, JWT create/decode
 │   │   ├── deps.py        # get_current_user() FastAPI dependency (Bearer token → User)
 │   │   ├── geometry.py    # farm polygon validation + area/centroid math (shapely + pyproj)
-│   │   └── satellite_health.py  # health-score math, EE-free and unit-testable (§5.6)
+│   │   └── satellite_health.py  # health-score math + generic benchmark curve, EE-free (§5.6)
+│   ├── ml/
+│   │   └── crop_benchmarks.py  # per-crop NDVI-by-growth-stage reference curves (§5.9)
 │   ├── models/
 │   │   ├── base.py        # declarative Base (Alembic autogenerate target)
 │   │   ├── user.py        # User ORM model
 │   │   ├── farm.py        # Farm ORM model
-│   │   └── satellite_observation.py  # SatelliteObservation ORM model (§5.6)
+│   │   ├── satellite_observation.py  # SatelliteObservation ORM model (§5.6)
+│   │   ├── index_timeseries.py  # IndexTimeseriesPoint ORM model (§5.9)
+│   │   └── farm_alert.py  # FarmAlert ORM model (§5.9)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
 │   │   ├── farm.py        # pydantic request/response models for /farms
-│   │   └── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
+│   │   ├── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
+│   │   └── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
 │   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
-│   │   └── satellite_repository.py  # DB queries for SatelliteObservation
+│   │   ├── satellite_repository.py  # DB queries for SatelliteObservation
+│   │   ├── index_timeseries_repository.py  # DB queries for IndexTimeseriesPoint, incl. upsert
+│   │   └── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6)
+│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9)
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
-│   │   └── satellite_service.py # business logic: run/cache a farm's satellite analysis
+│   │   └── satellite_service.py # business logic: analysis, timeseries, and alert rules
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
-│   │   └── satellite.py   # satellite refresh/latest + the background-refresh helper (§5.6)
-│   └── main.py             # FastAPI app, CORS, router registration, Earth Engine startup init
+│   │   ├── satellite.py   # satellite refresh/latest/timeseries + the background-refresh helper
+│   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   ├── jobs/
+│   │   └── scheduler.py   # APScheduler nightly job: refresh every farm's timeseries + alerts (§5.9)
+│   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 68 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 95 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -257,6 +272,9 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | DELETE | `/farms/{farm_id}` | Delete a farm — 404 if it's not yours |
 | POST | `/farms/{farm_id}/satellite/refresh` | Run a live Sentinel-2 analysis for this farm right now and cache the result (§5.6) |
 | GET | `/farms/{farm_id}/satellite/latest` | Read the most recently cached analysis — never calls Earth Engine; 404 if none exists yet (§5.6) |
+| GET | `/farms/{farm_id}/satellite/timeseries` | Read the farm's accumulated NDVI/NDWI/EVI history, oldest first — cache-only, built by the nightly job (§5.9) |
+| GET | `/farms/{farm_id}/alerts` | List detected anomalies for the farm (NDVI drop, below-benchmark, water stress), most recent first (§5.9) |
+| PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -438,8 +456,58 @@ more Earth Engine layers (soil moisture is feasible; N-P-K is not remotely sense
 data source entirely. NDWI/EVI/NDMI are computed and stored (§5.6) and now available via the API,
 but only NDVI and the canopy health % breakdown are currently surfaced in the UI (§5.7) — NDWI has
 a "Water" map layer button already in `SatelliteAnalyticsPanel` but it still shows the map, not a
-real moisture value breakdown card the way NDVI does. The historical NDVI trend graph and
-stress-zone detection remain synthetic for every farm, real or demo (§5.6/§5.7).
+real moisture value breakdown card the way NDVI does. Stress-zone detection (per-pixel, not
+field-mean, NDVI) remains synthetic. The historical NDVI trend graph is still synthetic **in the
+UI** (`SatelliteAnalyticsPanel`'s "Demo trend" tag, §5.7) even though real historical data now
+exists server-side as of §5.9 below — wiring the graph to `GET /farms/{id}/satellite/timeseries`
+instead of `enrichFarmDraft()`'s synthetic points is the natural next frontend step.
+
+### 5.9 NDVI/NDWI/EVI timeseries, benchmark alerts, and the nightly scheduler job
+
+Builds on §5.6's single-scene analysis to track a farm's vegetation *history* over time and flag
+anomalies automatically, instead of only ever showing "right now":
+
+- **`EarthEngineClient.build_field_timeseries(polygon, start, end)`** computes NDVI/NDWI/EVI field
+  means and field cloud % for **every** Sentinel-2 scene in the date range (not just the one best
+  scene, unlike `analyze_field`) — the same one-`.map()`-then-one-`getInfo()` principle as
+  everywhere else in this client, so scanning up to ~120 days of scenes still costs exactly one
+  Earth Engine round trip, never one per scene/per Python-loop-iteration.
+- **`app/ml/crop_benchmarks.py`** holds small, hand-assembled NDVI-by-growth-stage reference curves
+  for rice, wheat, onion, tomato, sugarcane, cotton, maize, and soybean — explicitly labelled as
+  approximate reference curves, not a trained model or scientifically calibrated agronomic data.
+  An unrecognised crop falls back to the generic curve already used by §5.6's health score
+  (`app/core/satellite_health.py`, refactored to expose a reusable `interpolate_benchmark_curve()`
+  that both the generic and per-crop curves now share).
+- **`SatelliteService.build_timeseries(farm)`**: queries from `max(farm.sowing_date, today - 120
+  days)` through today (the 120-day cap keeps the Earth Engine query bounded even for an
+  old/perennial field), keeps only scenes under 30% field cloud, and **upserts** each one into
+  `index_timeseries` keyed on `(farm_id, image_date)` — re-running it (the nightly job does, every
+  night, over a rolling window) updates existing points rather than duplicating them. Each stored
+  point also carries the crop-stage benchmark NDVI *as of that point's date*, so later alert
+  comparisons don't need to recompute it.
+- **Three alert rules**, checked over the full stored series after every `build_timeseries` call:
+  1. **`ndvi_drop`** (warning) — NDVI fell more than 15% (relative) between two consecutive clear
+     passes.
+  2. **`below_benchmark`** (warning) — NDVI has been more than 0.1 below the crop-stage benchmark
+     for two consecutive passes (a single low pass doesn't fire this — could just be noise).
+  3. **`water_stress`** (critical) — NDWI fell below 0 while the farm is in a rough "vegetative
+     stage" window (day 20–90 after sowing), a generic (not per-crop) gate on *when* this check is
+     worth running.
+  Alerts are de-duplicated per `(farm_id, alert_type, detected_at)` — re-scanning the same
+  historical passes (which the nightly job does every run) never creates duplicate alerts.
+- **`app/jobs/scheduler.py`** registers an `AsyncIOScheduler` job (APScheduler) at `02:00` server
+  time, started/stopped in `main.py`'s `lifespan`. It runs `build_timeseries` for **every** farm
+  across every user (`FarmRepository.list_all()`) — skipping the whole run quietly if Earth Engine
+  isn't configured, and skipping (logging why) just the one farm, not the whole batch, if a single
+  farm's analysis fails.
+- **`GET /farms/{id}/satellite/timeseries`** and **`GET /farms/{id}/alerts`** are both cache-only
+  reads — they show what the nightly job has already found, never triggering a live Earth Engine
+  call themselves. **`PATCH /alerts/{id}/read`** marks one alert read, checking ownership via the
+  alert's farm (an alert has no `user_id` of its own) with the same 404-never-403
+  anti-enumeration pattern used throughout `/farms`.
+- New dependency: **`apscheduler`** (added to `requirements.txt`).
+- Not yet wired into the frontend — same status as §5.6 was before §5.7 existed. `GET .../timeseries`
+  and `GET .../alerts` are real, working endpoints, but nothing in the UI calls them yet.
 
 ---
 
@@ -675,8 +743,14 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 68 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 95 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
+
+**Nightly satellite timeseries job (§5.9)**: starts automatically with the backend (registered in
+`main.py`'s `lifespan`) and runs at 02:00 server time — inconvenient to wait for during local dev.
+To trigger it immediately instead, run `python -c "import asyncio; from
+app.jobs.scheduler import run_nightly_timeseries_refresh; asyncio.run(run_nightly_timeseries_refresh())"`
+from `backend/` with the venv active.
 
 **Frontend**:
 ```bash
@@ -703,7 +777,8 @@ npm run dev    # http://localhost:3000
 | Earth Engine connectivity | ✅ Real (when `GEE_PROJECT_ID` + ADC login are set up) — `/health/earth-engine` runs a live Sentinel-2 query; see §5.5 |
 | Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6 |
 | Live NDVI/canopy % shown on Dashboard/Satellite for real farms | ✅ Real — `useFarmSatelliteAnalysis()` + `applyLiveSatellite()` overlay real current stats onto the UI, with a "Live Sentinel-2 data" banner and a refresh button; see §5.7. Guest/demo farms still show synthetic data, as they should (no real polygon to analyze) |
-| NDVI historical trend graph, stress-zone detection | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; see §5.7/§5.8 |
+| NDVI/NDWI/EVI timeseries + automated alerts (backend) | ✅ Real — nightly `AsyncIOScheduler` job rebuilds every farm's history from Sentinel-2 and runs 3 alert rules (NDVI drop, below-benchmark, water stress); `GET .../timeseries` and `GET .../alerts` are real, working endpoints; see §5.9 |
+| NDVI historical trend graph, stress-zone detection (frontend) | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (above) but nothing in the UI calls it yet; see §5.7/§5.8/§5.9 |
 | Soil pH/N-P-K, weather | ❌ Mock only — not satellite-derived at all, need a different data source |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
@@ -722,11 +797,23 @@ npm run dev    # http://localhost:3000
 - **Surface NDWI/EVI/NDMI and the health score more prominently client-side** — computed, stored,
   and returned by the API (§5.6), and the current-stats overlay already shows NDVI/NDWI/canopy %
   (§5.7), but EVI/NDMI/health_score aren't shown anywhere in the UI yet.
-- **Build a real historical NDVI trend and real stress-zone detection** — the last remaining
-  synthetic pieces of the Satellite page (§5.8). Trend would need to store multiple observations
-  over time per farm (the table already supports this — `satellite_observations` isn't
-  overwritten, it accumulates) and query them by date range; stress zones would need per-pixel (not
-  just field-mean) NDVI data, which `reduceRegion` doesn't currently export.
+- **Wire the real NDVI/NDWI/EVI timeseries (§5.9) into the frontend** — `GET
+  /farms/{id}/satellite/timeseries` is real and populated nightly, but `SatelliteAnalyticsPanel`'s
+  trend graph still reads `enrichFarmDraft()`'s synthetic points. This is the natural next step now
+  that both the backend timeseries and the alerts (below) exist.
+- **Surface `/farms/{id}/alerts` in the UI** — real alerts are generated nightly (§5.9) but nothing
+  shows them to a farmer yet; a notification badge/list on Dashboard or Satellite would use this
+  directly.
+- **Real stress-zone detection** — the one piece of §5.6/§5.7/§5.8's "still synthetic" list without
+  a backend counterpart yet. Would need per-pixel (not just field-mean) NDVI data, which
+  `reduceRegion` doesn't currently export — a genuinely new piece of Earth Engine work, not just
+  frontend wiring like the two bullets above.
+- **Verify the nightly scheduler job against farms with real historical cloud-free passes** — the
+  alert rules (§5.9) are covered by 13 unit tests against a mocked `EarthEngineClient`, and the
+  live Earth Engine integration itself was verified end-to-end, but the *combination* (a real farm
+  whose polygon actually has clear historical Sentinel-2 passes, producing a real stored timeseries
+  and a real alert) hasn't been observed live yet — the one test polygon used for live verification
+  happened to have persistent heavy cloud cover in its analysis window.
 - Build real backend endpoints for fields/weather/irrigation/yield, and a corresponding
   `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the
   farms/satellite API.
