@@ -19,7 +19,7 @@ import {
   CheckCircle2, Activity
 } from "lucide-react";
 
-export type SatelliteMapLayer = "rgb" | "ndvi" | "ndwi" | "stress";
+export type SatelliteMapLayer = "rgb" | "ndvi" | "ndwi" | "evi" | "stress";
 
 function CanopyDonut({ satellite }: { satellite: FarmSatellite }) {
   const radius = 46;

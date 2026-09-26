@@ -23,20 +23,22 @@ import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import { useFarmSatelliteLayers } from "@/lib/hooks/useFarmSatelliteLayers";
 import SatelliteAnalyticsPanel, { SatelliteMapLayer } from "@/components/satellite/SatelliteAnalyticsPanel";
 import {
-  MapPin, Satellite, Droplets, Camera, AlertTriangle,
+  MapPin, Satellite, Droplets, Camera, AlertTriangle, Leaf,
   ChevronLeft, ChevronDown, Plus, RefreshCw, BadgeCheck, Loader2, Calendar
 } from "lucide-react";
 
-const TILE_KEY_BY_LAYER: Record<SatelliteMapLayer, "true_color" | "ndvi" | "ndwi" | "stress"> = {
+const TILE_KEY_BY_LAYER: Record<SatelliteMapLayer, "true_color" | "ndvi" | "ndwi" | "evi" | "stress"> = {
   rgb: "true_color",
   ndvi: "ndvi",
   ndwi: "ndwi",
+  evi: "evi",
   stress: "stress",
 };
 
 const LAYERS: { key: SatelliteMapLayer; label: string; icon: typeof Satellite }[] = [
   { key: "ndvi", label: "NDVI (Vegetation)", icon: Satellite },
   { key: "ndwi", label: "NDWI (Water)", icon: Droplets },
+  { key: "evi", label: "EVI (Enhanced Veg.)", icon: Leaf },
   { key: "rgb", label: "True Color", icon: Camera },
   { key: "stress", label: "Stress Zones", icon: AlertTriangle },
 ];
@@ -44,6 +46,7 @@ const LAYERS: { key: SatelliteMapLayer; label: string; icon: typeof Satellite }[
 const LAYER_CAPTIONS: Record<SatelliteMapLayer, string> = {
   ndvi: "Green areas indicate healthy vegetation. Red areas may indicate stress or poor crop growth.",
   ndwi: "Blue/dark areas indicate higher canopy moisture. Pale areas may indicate water stress.",
+  evi: "Enhanced Vegetation Index — corrects for canopy background and atmospheric noise, useful in denser canopy.",
   rgb: "High-resolution natural optical view of the field, as seen by the satellite sensor.",
   stress: "Automated classification of the field into healthy, moderate, and stressed vegetation zones.",
 };
@@ -109,6 +112,13 @@ function SatelliteContent() {
 
   const activeLayerMeta = LAYERS.find((l) => l.key === activeLayer)!;
   const imagedDate = observation ? observation.provenance.as_of : displaySatellite.metadata.acquisitionDate;
+
+  const activeLayerMean =
+    activeLayer === "ndwi"
+      ? displaySatellite.ndwi
+      : activeLayer === "evi"
+      ? observation?.evi.mean ?? null
+      : displaySatellite.meanNdvi;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5 pb-16">
@@ -256,7 +266,8 @@ function SatelliteContent() {
         <span className="w-2 h-2 rounded-full bg-farm-green mt-1.5 flex-shrink-0" />
         <p className="text-xs text-farm-muted leading-relaxed">
           <strong className="text-farm-dark">
-            {activeLayerMeta.label} Index (Mean: {activeLayer === "ndwi" ? displaySatellite.ndwi.toFixed(2) : displaySatellite.meanNdvi.toFixed(2)})
+            {activeLayerMeta.label} Index
+            {activeLayerMean !== null && ` (Mean: ${activeLayerMean.toFixed(2)})`}
           </strong>{" "}
           {LAYER_CAPTIONS[activeLayer]}
         </p>
