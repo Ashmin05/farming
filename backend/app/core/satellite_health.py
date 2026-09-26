@@ -5,11 +5,13 @@ be unit-tested with plain numbers -- no EE mocking required.
 
 from datetime import date
 
+BenchmarkCurve = list[tuple[int, float]]
+
 # A rough, non-scientific NDVI-by-growth-stage curve used only to judge
 # whether today's NDVI is "on track" for however long it's been since
-# sowing. Not crop-specific -- a real implementation would vary this per
-# crop and region.
-_STAGE_BENCHMARKS: list[tuple[int, float]] = [
+# sowing. This is the *generic* curve -- used as a fallback for a crop with
+# no entry in app/ml/crop_benchmarks.py's per-crop curves.
+GENERIC_STAGE_BENCHMARKS: BenchmarkCurve = [
     (0, 0.20),  # emergence
     (20, 0.35),
     (40, 0.65),
@@ -20,22 +22,31 @@ _STAGE_BENCHMARKS: list[tuple[int, float]] = [
 ]
 
 
-def crop_stage_benchmark_ndvi(days_since_sowing: int | None) -> float:
-    """Expected NDVI for a generic crop this many days after sowing, read
-    off a simple piecewise-linear curve. Falls back to the curve's peak
-    (0.78) when the sowing date is unknown, so an unknown-stage field isn't
-    penalised for it."""
+def interpolate_benchmark_curve(
+    curve: BenchmarkCurve, days_since_sowing: int | None, *, default: float
+) -> float:
+    """Expected NDVI this many days after sowing, read off a simple
+    piecewise-linear `curve` of (day, NDVI) points sorted by day. Falls back
+    to `default` when the sowing date is unknown, and clamps to the curve's
+    first/last point outside its range (rather than extrapolating)."""
     if days_since_sowing is None:
-        return 0.78
-    if days_since_sowing <= _STAGE_BENCHMARKS[0][0]:
-        return _STAGE_BENCHMARKS[0][1]
-    if days_since_sowing >= _STAGE_BENCHMARKS[-1][0]:
-        return _STAGE_BENCHMARKS[-1][1]
-    for (day_a, ndvi_a), (day_b, ndvi_b) in zip(_STAGE_BENCHMARKS, _STAGE_BENCHMARKS[1:]):
+        return default
+    if days_since_sowing <= curve[0][0]:
+        return curve[0][1]
+    if days_since_sowing >= curve[-1][0]:
+        return curve[-1][1]
+    for (day_a, ndvi_a), (day_b, ndvi_b) in zip(curve, curve[1:]):
         if day_a <= days_since_sowing <= day_b:
             fraction = (days_since_sowing - day_a) / (day_b - day_a)
             return ndvi_a + fraction * (ndvi_b - ndvi_a)
-    return _STAGE_BENCHMARKS[-1][1]  # unreachable; keeps type checkers happy
+    return curve[-1][1]  # unreachable; keeps type checkers happy
+
+
+def crop_stage_benchmark_ndvi(days_since_sowing: int | None) -> float:
+    """Expected NDVI for a generic (crop-unaware) curve -- see
+    app.ml.crop_benchmarks.benchmark_ndvi_for_crop for the per-crop version
+    used by the satellite timeseries/alerts feature."""
+    return interpolate_benchmark_curve(GENERIC_STAGE_BENCHMARKS, days_since_sowing, default=0.78)
 
 
 def days_since(sowing_date: date | None, as_of: date) -> int | None:

@@ -19,6 +19,13 @@ class FarmRepository:
         )
         return list(result.scalars().all())
 
+    async def list_all(self) -> list[Farm]:
+        """Every farm across every user -- used by the nightly satellite
+        timeseries job (app/jobs/scheduler.py), which has no single owner
+        to scope to."""
+        result = await self.session.execute(select(Farm))
+        return list(result.scalars().all())
+
     async def create(
         self,
         *,

@@ -7,10 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.deps import get_current_user
 from app.integrations.earth_engine_client import earth_engine_client
+from app.models.index_timeseries import IndexTimeseriesPoint
 from app.models.user import User
+from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
+from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.schemas.satellite import SatelliteObservationResponse, observation_to_response
+from app.schemas.timeseries import TimeseriesPointResponse
 from app.services.farm_service import FarmNotFoundError, FarmService
 from app.services.satellite_service import SatelliteAnalysisError, SatelliteService
 
@@ -24,7 +28,12 @@ def get_farm_service(session: AsyncSession = Depends(get_db)) -> FarmService:
 
 
 def get_satellite_service(session: AsyncSession = Depends(get_db)) -> SatelliteService:
-    return SatelliteService(SatelliteRepository(session), earth_engine_client)
+    return SatelliteService(
+        SatelliteRepository(session),
+        earth_engine_client,
+        IndexTimeseriesRepository(session),
+        FarmAlertRepository(session),
+    )
 
 
 @router.post("/{farm_id}/satellite/refresh", response_model=SatelliteObservationResponse)
@@ -71,6 +80,24 @@ async def get_latest_satellite_analysis(
             detail="No satellite analysis yet for this farm. POST .../satellite/refresh to run one.",
         )
     return observation_to_response(observation)
+
+
+@router.get("/{farm_id}/satellite/timeseries", response_model=list[TimeseriesPointResponse])
+async def get_satellite_timeseries(
+    farm_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    farm_service: FarmService = Depends(get_farm_service),
+    satellite_service: SatelliteService = Depends(get_satellite_service),
+) -> list[IndexTimeseriesPoint]:
+    """Cache-only read of the farm's accumulated NDVI/NDWI/EVI history,
+    oldest first -- never calls Earth Engine. Populated by the nightly
+    scheduler job (app/jobs/scheduler.py), not by this request."""
+    try:
+        farm = await farm_service.get_farm(current_user, farm_id)
+    except FarmNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
+
+    return await satellite_service.get_timeseries(farm)
 
 
 async def run_background_refresh(farm_id: uuid.UUID) -> None:

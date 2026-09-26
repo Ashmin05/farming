@@ -331,3 +331,122 @@ class TestAnalyzeField:
         assert result.is_fallback is True
         assert result.satellite == "S2B"
         assert result.cloud_pct == 55.0
+
+
+class TestBuildFieldTimeseries:
+    """Like TestAnalyzeField, mocks only the _get_info boundary -- one call
+    here, since build_field_timeseries computes stats for every candidate
+    scene in a single map()+getInfo() rather than a selection round trip
+    followed by a stats round trip."""
+
+    async def test_raises_not_configured_without_touching_ee(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = EarthEngineClient(project_id=None)
+
+        with pytest.raises(EarthEngineNotConfiguredError):
+            await client.build_field_timeseries(
+                {"type": "Polygon", "coordinates": [[[0, 0]]]},
+                start=date(2026, 6, 1),
+                end=date(2026, 9, 1),
+            )
+
+        fake_ee.ImageCollection.assert_not_called()
+
+    async def test_returns_empty_list_when_no_scenes_in_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value={"features": []}))
+
+        points = await client.build_field_timeseries(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, start=date(2026, 6, 1), end=date(2026, 9, 1)
+        )
+
+        assert points == []
+
+    async def test_parses_and_sorts_points_by_date(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        raw = {
+            "features": [
+                {
+                    "properties": {
+                        "TS_IMAGE_DATE": "2026-08-15",
+                        "TS_SATELLITE": "Sentinel-2A",
+                        "TS_CLOUD_PCT": 12.3,
+                        "NDVI": 0.55,
+                        "NDWI": -0.05,
+                        "EVI": 0.40,
+                    }
+                },
+                {
+                    "properties": {
+                        "TS_IMAGE_DATE": "2026-06-10",
+                        "TS_SATELLITE": "Sentinel-2B",
+                        "TS_CLOUD_PCT": 4.0,
+                        "NDVI": 0.20,
+                        "NDWI": -0.15,
+                        "EVI": 0.15,
+                    }
+                },
+            ]
+        }
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value=raw))
+
+        points = await client.build_field_timeseries(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, start=date(2026, 6, 1), end=date(2026, 9, 1)
+        )
+
+        assert [p.image_date for p in points] == [date(2026, 6, 10), date(2026, 8, 15)]
+        assert points[0].satellite == "S2B"
+        assert points[0].cloud_pct == 4.0
+        assert points[0].ndvi_mean == 0.20
+        assert points[1].satellite == "S2A"
+        assert points[1].ndvi_mean == 0.55
+        assert points[1].evi_mean == 0.40
+
+    async def test_skips_features_missing_required_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        raw = {
+            "features": [
+                # Missing NDVI entirely (e.g. zero valid pixels for this scene) -- skipped, not crashed.
+                {
+                    "properties": {
+                        "TS_IMAGE_DATE": "2026-07-01",
+                        "TS_SATELLITE": "Sentinel-2A",
+                        "TS_CLOUD_PCT": 10.0,
+                        "NDVI": None,
+                        "NDWI": None,
+                        "EVI": None,
+                    }
+                },
+                {
+                    "properties": {
+                        "TS_IMAGE_DATE": "2026-07-15",
+                        "TS_SATELLITE": "Sentinel-2B",
+                        "TS_CLOUD_PCT": 8.0,
+                        "NDVI": 0.45,
+                        "NDWI": None,
+                        "EVI": None,
+                    }
+                },
+            ]
+        }
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value=raw))
+
+        points = await client.build_field_timeseries(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, start=date(2026, 6, 1), end=date(2026, 9, 1)
+        )
+
+        assert len(points) == 1
+        assert points[0].image_date == date(2026, 7, 15)
+        assert points[0].ndvi_mean == 0.45
+        # NDWI/EVI were null for this scene -- defaulted to 0.0 rather than crashing.
+        assert points[0].ndwi_mean == 0.0
+        assert points[0].evi_mean == 0.0

@@ -5,7 +5,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
+from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
+from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
@@ -54,3 +56,13 @@ def farm_service(farm_repository: FarmRepository) -> FarmService:
 @pytest.fixture
 def satellite_repository(session: AsyncSession) -> SatelliteRepository:
     return SatelliteRepository(session)
+
+
+@pytest.fixture
+def index_timeseries_repository(session: AsyncSession) -> IndexTimeseriesRepository:
+    return IndexTimeseriesRepository(session)
+
+
+@pytest.fixture
+def farm_alert_repository(session: AsyncSession) -> FarmAlertRepository:
+    return FarmAlertRepository(session)

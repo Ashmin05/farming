@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.integrations.earth_engine_client import earth_engine_client
-from app.routers import auth, farms, health, satellite
+from app.jobs.scheduler import start_scheduler, stop_scheduler
+from app.routers import alerts, auth, farms, health, satellite
 
 
 @asynccontextmanager
@@ -13,7 +14,11 @@ async def lifespan(app: FastAPI):
     # Never raises — an unconfigured or invalid Earth Engine key must not
     # stop the rest of the API from starting. See EarthEngineClient.initialize.
     earth_engine_client.initialize()
+    # Registers the nightly satellite timeseries job; harmless to start even
+    # when Earth Engine isn't configured -- the job itself checks and skips.
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(title="FasalSetu API", version="0.1.0", lifespan=lifespan)
@@ -30,3 +35,4 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(farms.router)
 app.include_router(satellite.router)
+app.include_router(alerts.router)
