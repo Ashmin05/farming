@@ -264,7 +264,7 @@ backend/
 │   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
 │   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
 │   ├── jobs/
-│   │   └── scheduler.py   # APScheduler nightly job: refresh every farm's timeseries + alerts (§5.9)
+│   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
 └── tests/                   # pytest suite (async, in-memory SQLite) — 119 tests
@@ -298,7 +298,7 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | GET | `/farms/{farm_id}/alerts` | List detected anomalies for the farm (NDVI drop, below-benchmark, water stress), most recent first (§5.9) |
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 | GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
-| GET | `/farms/{farm_id}/environment` | Rainfall (CHIRPS), land-surface temperature (MODIS), soil moisture (SMAP, regional), and soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution (§5.11) |
+| GET | `/farms/{farm_id}/environment` | Cache-only read of rainfall (CHIRPS)/land-surface temperature (MODIS)/soil moisture (SMAP, regional), refreshed nightly, plus soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution; 404 if no report yet (§5.11) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -606,12 +606,20 @@ Engine datasets, each with a very different native resolution and update cadence
   10m-scale vegetation data.
 - **Soil — OpenLandMap (pH, organic carbon, USDA texture class)**: static, ~2017-vintage global
   layers with no real acquisition date. **Fetched once per farm and reused after that** — as asked —
-  via `EnvironmentSnapshot.soil_fetched_at`: `SatelliteService.environment_report()` only calls
+  via `EnvironmentSnapshot.soil_fetched_at`: `SatelliteService.refresh_environment()` only calls
   `EarthEngineClient.get_soil_properties()` when that column is still null, and the repository's
   `upsert()` only overwrites the `soil_*` columns when the caller just fetched them, leaving them
-  untouched on every other call. The dynamic sections (rainfall/temperature/soil moisture) refresh
-  on every call — no caching layer for those, since they change day to day and the spec didn't ask
-  for one (contrast §5.10's explicit ~12h tile cache).
+  untouched on every other call.
+- **Nightly refresh, cache-only reads** — same split as §5.9's timeseries/alerts: `refresh_environment()`
+  (rainfall/temperature/soil moisture recomputed every call; soil only on the first) is what the
+  nightly scheduler job calls for every farm, never what the API route calls directly.
+  `GET /farms/{id}/environment` only reads back whatever `EnvironmentSnapshot` row is already
+  cached (`SatelliteService.get_environment()`) — it never touches Earth Engine itself, and returns
+  404 for a farm with no report yet. `app/jobs/scheduler.py`'s `run_nightly_environment_refresh()`
+  runs at 02:30 server time (staggered 30 minutes after the 02:00 timeseries job, same
+  `AsyncIOScheduler`/`CronTrigger`, registered as its own job id alongside it in `start_scheduler()`),
+  looping every farm via `FarmRepository.list_all()` with the same per-farm error isolation as the
+  timeseries job — one farm's Earth Engine failure is logged and skipped, never aborts the batch.
 - **A real, live-caught scale bug**: OpenLandMap's soil layers and each dynamic dataset's own native
   pixel is far coarser than this project's ~1 hectare test farm polygon (SMAP ~11km, CHIRPS ~5.5km,
   OpenLandMap 250m). Passing that native resolution as `reduceRegion`'s `scale` parameter made Earth
@@ -628,16 +636,19 @@ Engine datasets, each with a very different native resolution and update cadence
   determined empirically — the raw pixel value at the test farm, divided by 5, gives an implausibly
   bare 0.4 g/kg, while multiplied by 5 gives 10 g/kg (1% organic carbon), a normal figure for real
   cropland. Flagged in code in case an authoritative source turns up a different documented factor.
-- **`GET /farms/{id}/environment`**: builds all four sections and returns them with the `EnvironmentSnapshot`
-  row's values plus a `Provenance` (source, resolution, as-of date) per section, so the UI can show
-  e.g. "10 m field" next to a vegetation stat and "~10 km regional" next to soil moisture rather than
-  presenting every number as equally precise.
-- Live-verified end-to-end against the real test farm after the scale fix: 8.8mm/36.4mm/507.4mm
-  rainfall over 7/30/90 days (plausible for peak Maharashtra monsoon season), 25.2°C mean LST with 0
-  hot periods, 0.455 m³/m³ soil moisture (dated 2025-06-27, correctly surfaced as stale), and pH 7.4
-  / 10.0 g/kg organic carbon / "Clay" texture — then verified a second call reused the identical soil
-  values while rainfall's `as_of`/values still changed, confirming the "fetch once, reuse" caching
-  actually works live, not just in the mocked tests.
+- **`GET /farms/{id}/environment`**: returns the cached `EnvironmentSnapshot` row's values plus a
+  `Provenance` (source, resolution, as-of date) per section, so the UI can show e.g. "10 m field"
+  next to a vegetation stat and "~10 km regional" next to soil moisture rather than presenting every
+  number as equally precise.
+- Live-verified end-to-end, including the scheduler wiring itself, not just the underlying method:
+  confirmed `GET .../environment` 404s for a farm with no cached report yet; manually invoked
+  `run_nightly_environment_refresh()` (the exact function `start_scheduler()` registers at 02:30) and
+  watched it correctly refresh **all 6 real farms** in the database in one run, logging
+  `"6/6 farm(s) refreshed"`; then confirmed `GET .../environment` returned the newly cached values in
+  ~0.3s (down from the ~15-25s a live Earth Engine round trip takes) — proof it's now a pure DB read.
+  Values for the test farm: 8.8mm/36.4mm/507.4mm rainfall over 7/30/90 days (plausible for peak
+  Maharashtra monsoon season), 25.2°C mean LST with 0 hot periods, 0.455 m³/m³ soil moisture (dated
+  2025-06-27, correctly surfaced as stale), and pH 7.4 / 10.0 g/kg organic carbon / "Clay" texture.
 - Not yet wired into the frontend — same status as §5.6 was before §5.7 existed, and §5.9 still is.
 
 ---
@@ -874,14 +885,17 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 95 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 121 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
-**Nightly satellite timeseries job (§5.9)**: starts automatically with the backend (registered in
-`main.py`'s `lifespan`) and runs at 02:00 server time — inconvenient to wait for during local dev.
-To trigger it immediately instead, run `python -c "import asyncio; from
-app.jobs.scheduler import run_nightly_timeseries_refresh; asyncio.run(run_nightly_timeseries_refresh())"`
-from `backend/` with the venv active.
+**Nightly jobs (§5.9, §5.11)**: both start automatically with the backend (registered in `main.py`'s
+`lifespan`) — timeseries+alerts at 02:00 server time, environment at 02:30 — inconvenient to wait for
+during local dev. To trigger either immediately instead, run (from `backend/` with the venv active,
+and `earth_engine_client.initialize()` first if running outside the actual FastAPI process):
+```bash
+python -c "import asyncio; from app.jobs.scheduler import run_nightly_timeseries_refresh; asyncio.run(run_nightly_timeseries_refresh())"
+python -c "import asyncio; from app.jobs.scheduler import run_nightly_environment_refresh; asyncio.run(run_nightly_environment_refresh())"
+```
 
 **Frontend**:
 ```bash
@@ -912,7 +926,7 @@ npm run dev    # http://localhost:3000
 | NDVI historical trend graph | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (§5.9) but nothing in the UI calls it yet |
 | Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
-| Farm environment report (backend) | ✅ Real — `GET /farms/{id}/environment` returns live CHIRPS rainfall, MODIS land-surface temperature, SMAP soil moisture, and cached OpenLandMap soil pH/organic carbon/texture, each with its own provenance/resolution; see §5.11. Not yet wired into the frontend |
+| Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Not yet wired into the frontend |
 | Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture now exist server-side (§5.11, not yet in the UI); N-P-K and weather are still not satellite-derived, need a different data source |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
