@@ -5,6 +5,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
+from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
@@ -78,3 +79,8 @@ def satellite_layer_repository(session: AsyncSession) -> SatelliteLayerRepositor
 @pytest.fixture
 def stress_zone_repository(session: AsyncSession) -> StressZoneRepository:
     return StressZoneRepository(session)
+
+
+@pytest.fixture
+def environment_snapshot_repository(session: AsyncSession) -> EnvironmentSnapshotRepository:
+    return EnvironmentSnapshotRepository(session)

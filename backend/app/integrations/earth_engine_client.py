@@ -52,6 +52,70 @@ STRESS_ZONE_MIN_AREA_M2 = 200.0
 # but as a conservative, simple cache-invalidation policy.
 MAP_LAYERS_CACHE_HOURS = 12
 
+# Farm environment report (EarthEngineClient.get_environment_dynamics /
+# get_soil_properties). Timeout is generous -- this bundles several
+# independent Earth Engine round trips (rainfall, temperature, soil
+# moisture), each of which can be slow on a cache-cold call.
+ENVIRONMENT_TIMEOUT_SECONDS = 45.0
+
+# reduceRegion's `scale` is a *sampling* parameter, not a claim about the
+# source data's real resolution -- passing a dataset's true native scale
+# (e.g. CHIRPS's ~5.5km or SMAP's ~11km pixel) over a farm polygon smaller
+# than that one pixel makes EE's grid-alignment sampling miss the region
+# entirely and silently return null instead of the enclosing pixel's value
+# (confirmed empirically: scale=5566 on a ~1ha polygon -> None, scale=30 on
+# the same polygon -> the real value). A small scale here just means EE
+# resamples the coarse raster down before reducing; it does not change
+# which pixel's value comes back for a region this small. The dataset's
+# real native resolution is what's surfaced to the UI via the separate
+# *_RESOLUTION_LABEL constants below -- these two concerns are independent.
+SMALL_FIELD_REDUCE_SCALE_M = 30
+
+CHIRPS_COLLECTION_ID = "UCSB-CHG/CHIRPS/DAILY"
+CHIRPS_RESOLUTION_LABEL = "~5.5 km field-region (CHIRPS daily)"
+# CHIRPS's "final" product lags real time by several weeks -- a naive
+# "last 7 days from today" window can come back empty. Windows are anchored
+# to the latest date actually present in the collection instead (see
+# _get_rainfall_summary), not to today.
+RAINFALL_SINCE_SOWING_CAP_DAYS = 365  # bounds the query even for an old/perennial field
+
+MODIS_LST_COLLECTION_ID = "MODIS/061/MOD11A2"
+MODIS_LST_RESOLUTION_LABEL = "1 km (MODIS 8-day composite)"
+MODIS_LST_SCALE_FACTOR = 0.02  # per the dataset's documented band scale
+KELVIN_TO_CELSIUS_OFFSET = 273.15
+HOT_PERIOD_THRESHOLD_C = 35.0
+LST_LOOKBACK_DAYS = 60
+
+# NASA/SMAP/SPL4SMGP/007 is EE's flagged-deprecated SMAP L4 collection
+# (superseded by .../008), but it's what was asked for. Its production
+# stopped around mid-2025, so "latest" can be materially stale -- always
+# surfaced honestly via the returned `as_of` date rather than assumed fresh.
+SMAP_COLLECTION_ID = "NASA/SMAP/SPL4SMGP/007"
+SMAP_RESOLUTION_LABEL = "~9-11 km regional (SMAP L4)"
+
+# OpenLandMap/LandGIS static soil layers (~2017 global compilation) -- no
+# acquisition date, fetched once per farm and reused (see SatelliteService
+# .environment_report). Values are 250 m raster pixels; a farm's polygon is
+# usually smaller than one pixel, so `first()` (not `mean()`) is used to
+# read them -- `mean()` would silently average the *class numbers* of the
+# categorical texture band into a meaningless non-integer.
+OPENLANDMAP_PH_ASSET_ID = "OpenLandMap/SOL/SOL_PH-H2O_USDA-4C1A2A_M/v02"
+OPENLANDMAP_ORGANIC_CARBON_ASSET_ID = "OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02"
+OPENLANDMAP_TEXTURE_ASSET_ID = "OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02"
+OPENLANDMAP_RESOLUTION_LABEL = "250 m field-level (OpenLandMap, static ~2017 compilation)"
+OPENLANDMAP_PH_SCALE_FACTOR = 0.1  # band stores pH x10 (integer-encoded)
+# OpenLandMap doesn't expose its organic-carbon scale factor via getInfo();
+# this was determined empirically (raw pixel value x5 lands in the
+# plausible g/kg range for real agricultural soil; /5 does not -- see
+# get_soil_properties). Flagged here in case an authoritative source
+# surfaces a different documented factor later.
+OPENLANDMAP_ORGANIC_CARBON_SCALE_FACTOR = 5.0
+USDA_TEXTURE_CLASS_NAMES = {
+    1: "Clay", 2: "Silty Clay", 3: "Sandy Clay", 4: "Clay Loam",
+    5: "Silty Clay Loam", 6: "Sandy Clay Loam", 7: "Loam", 8: "Silt Loam",
+    9: "Sandy Loam", 10: "Silt", 11: "Loamy Sand", 12: "Sand",
+}
+
 # Roughly central India — used only by the health check to count recent
 # Sentinel-2 passes; the location itself has no other significance.
 HEALTH_CHECK_LON = 78.9629
@@ -150,6 +214,58 @@ class FieldMapLayers:
     evi_tile_url: str
     stress_tile_url: str
     stress_zones: list[StressZoneResult]
+
+
+@dataclass
+class RainfallSummary:
+    """CHIRPS-derived accumulated rainfall over a few trailing windows, all
+    anchored to the latest date actually present in CHIRPS (see
+    _get_rainfall_summary), not literally "today"."""
+
+    mm_7d: float
+    mm_30d: float
+    mm_90d: float
+    mm_since_sowing: float | None  # None only if sowing_date is after the latest CHIRPS date
+    as_of: date
+
+
+@dataclass
+class TemperatureSummary:
+    """MODIS land-surface-temperature summary over the trailing LST_LOOKBACK_DAYS."""
+
+    mean_lst_c: float | None
+    hot_periods_60d: int  # count of 8-day MODIS composites with field-mean LST > HOT_PERIOD_THRESHOLD_C
+    as_of: date  # most recent MODIS composite date actually used
+
+
+@dataclass
+class SoilMoistureSummary:
+    """Latest available SMAP L4 surface soil moisture -- see the SMAP_*
+    constants for why `as_of` can be materially stale."""
+
+    surface_moisture: float | None  # m3/m3 volumetric water content
+    as_of: date | None
+
+
+@dataclass
+class EnvironmentDynamics:
+    """The three non-static parts of a farm's environment report -- see
+    EarthEngineClient.get_environment_dynamics."""
+
+    rainfall: RainfallSummary
+    temperature: TemperatureSummary
+    soil_moisture: SoilMoistureSummary
+
+
+@dataclass
+class SoilProperties:
+    """Static OpenLandMap soil properties -- see
+    EarthEngineClient.get_soil_properties. Fetched once per farm and
+    reused (SatelliteService.environment_report), since these never change."""
+
+    ph: float | None
+    organic_carbon_g_per_kg: float | None
+    texture_class: str | None  # e.g. "Sandy Loam" -- see USDA_TEXTURE_CLASS_NAMES
 
 
 def _suggested_action(zone_type: str) -> str:
@@ -712,6 +828,163 @@ class EarthEngineClient:
                 )
             )
         return zones
+
+    async def get_environment_dynamics(
+        self, polygon_geojson: dict, sowing_date: date
+    ) -> EnvironmentDynamics:
+        """Rainfall, land-surface temperature, and soil moisture for a
+        farm's polygon -- the parts of the environment report that change
+        over time (contrast get_soil_properties, which is static and
+        fetched once). Three independent Earth Engine round trips, run
+        sequentially since each already minimizes its own network calls to
+        one (rainfall) or two (temperature/soil moisture -- one to find
+        what's available, one for the reduced value)."""
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+
+        geometry = ee.Geometry(polygon_geojson)
+        rainfall = await self._get_rainfall_summary(geometry, sowing_date)
+        temperature = await self._get_temperature_summary(geometry)
+        soil_moisture = await self._get_soil_moisture_summary(geometry)
+        return EnvironmentDynamics(rainfall=rainfall, temperature=temperature, soil_moisture=soil_moisture)
+
+    async def _get_rainfall_summary(self, geometry, sowing_date: date) -> RainfallSummary:
+        chirps = ee.ImageCollection(CHIRPS_COLLECTION_ID).select("precipitation")
+
+        latest_date_str = await self._get_info(
+            chirps.sort("system:time_start", False).first().date().format("YYYY-MM-dd"),
+            timeout=ENVIRONMENT_TIMEOUT_SECONDS,
+        )
+        # CHIRPS has been continuously updated since 1981; an empty result
+        # here would mean the collection itself is unreachable/broken, not
+        # a real data gap -- fall back to today rather than fail the whole
+        # environment report over it.
+        end_date = date.fromisoformat(latest_date_str) if latest_date_str else datetime.now(timezone.utc).date()
+
+        since_sowing_days = max(0, min((end_date - sowing_date).days, RAINFALL_SINCE_SOWING_CAP_DAYS))
+
+        def window_sum(days: int, band_name: str):
+            start = end_date - timedelta(days=days)
+            return (
+                chirps.filterDate(start.strftime("%Y-%m-%d"), (end_date + timedelta(days=1)).strftime("%Y-%m-%d"))
+                .sum()
+                .rename(band_name)
+            )
+
+        combined = window_sum(7, "mm_7d").addBands(window_sum(30, "mm_30d")).addBands(window_sum(90, "mm_90d"))
+        if since_sowing_days > 0:
+            combined = combined.addBands(window_sum(since_sowing_days, "mm_since_sowing"))
+
+        stats = await self._get_info(
+            combined.reduceRegion(reducer=ee.Reducer.mean(), geometry=geometry, scale=SMALL_FIELD_REDUCE_SCALE_M, bestEffort=True),
+            timeout=ENVIRONMENT_TIMEOUT_SECONDS,
+        )
+        stats = stats or {}
+        mm_since_sowing = stats.get("mm_since_sowing")
+        return RainfallSummary(
+            mm_7d=round(stats.get("mm_7d") or 0.0, 1),
+            mm_30d=round(stats.get("mm_30d") or 0.0, 1),
+            mm_90d=round(stats.get("mm_90d") or 0.0, 1),
+            mm_since_sowing=round(mm_since_sowing, 1) if mm_since_sowing is not None else None,
+            as_of=end_date,
+        )
+
+    async def _get_temperature_summary(self, geometry) -> TemperatureSummary:
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=LST_LOOKBACK_DAYS)
+        collection = (
+            ee.ImageCollection(MODIS_LST_COLLECTION_ID)
+            .filterDate(start.strftime("%Y-%m-%d"), (today + timedelta(days=1)).strftime("%Y-%m-%d"))
+            .select("LST_Day_1km")
+        )
+
+        def to_feature(image):
+            celsius = image.multiply(MODIS_LST_SCALE_FACTOR).subtract(KELVIN_TO_CELSIUS_OFFSET)
+            mean_c = celsius.reduceRegion(
+                reducer=ee.Reducer.mean(), geometry=geometry, scale=SMALL_FIELD_REDUCE_SCALE_M, bestEffort=True
+            ).get("LST_Day_1km")
+            return ee.Feature(None, {"date": image.date().format("YYYY-MM-dd"), "temp_c": mean_c})
+
+        raw = await self._get_info(
+            ee.FeatureCollection(collection.map(to_feature)), timeout=ENVIRONMENT_TIMEOUT_SECONDS
+        )
+        features = (raw or {}).get("features", [])
+
+        periods: list[tuple[date, float]] = []
+        for feature in features:
+            props = feature.get("properties", {})
+            temp_c = props.get("temp_c")
+            period_date = props.get("date")
+            if temp_c is None or period_date is None:
+                continue
+            periods.append((date.fromisoformat(period_date), temp_c))
+
+        if not periods:
+            return TemperatureSummary(mean_lst_c=None, hot_periods_60d=0, as_of=today)
+
+        temps = [t for _, t in periods]
+        hot_periods = sum(1 for t in temps if t > HOT_PERIOD_THRESHOLD_C)
+        return TemperatureSummary(
+            mean_lst_c=round(sum(temps) / len(temps), 1),
+            hot_periods_60d=hot_periods,
+            as_of=max(d for d, _ in periods),
+        )
+
+    async def _get_soil_moisture_summary(self, geometry) -> SoilMoistureSummary:
+        latest = ee.Image(
+            ee.ImageCollection(SMAP_COLLECTION_ID)
+            .select("sm_surface")
+            .sort("system:time_start", False)
+            .first()
+        )
+        feature = ee.Feature(
+            None,
+            {
+                "date": latest.date().format("YYYY-MM-dd"),
+                "value": latest.reduceRegion(
+                    reducer=ee.Reducer.mean(), geometry=geometry, scale=SMALL_FIELD_REDUCE_SCALE_M, bestEffort=True
+                ).get("sm_surface"),
+            },
+        )
+        raw = await self._get_info(feature, timeout=ENVIRONMENT_TIMEOUT_SECONDS)
+        props = (raw or {}).get("properties", {})
+        value = props.get("value")
+        period_date = props.get("date")
+        return SoilMoistureSummary(
+            surface_moisture=round(value, 3) if value is not None else None,
+            as_of=date.fromisoformat(period_date) if period_date else None,
+        )
+
+    async def get_soil_properties(self, polygon_geojson: dict) -> SoilProperties:
+        """Static OpenLandMap pH / organic carbon / USDA texture class at
+        the shallowest available depth (0 cm). Meant to be called once per
+        farm and cached -- see SatelliteService.environment_report."""
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+
+        geometry = ee.Geometry(polygon_geojson)
+        combined = (
+            ee.Image(OPENLANDMAP_PH_ASSET_ID).select("b0").rename("ph")
+            .addBands(ee.Image(OPENLANDMAP_ORGANIC_CARBON_ASSET_ID).select("b0").rename("organic_carbon"))
+            .addBands(ee.Image(OPENLANDMAP_TEXTURE_ASSET_ID).select("b0").rename("texture_class"))
+        )
+        stats = await self._get_info(
+            combined.reduceRegion(reducer=ee.Reducer.first(), geometry=geometry, scale=SMALL_FIELD_REDUCE_SCALE_M, bestEffort=True),
+            timeout=ENVIRONMENT_TIMEOUT_SECONDS,
+        )
+        stats = stats or {}
+
+        raw_ph = stats.get("ph")
+        raw_oc = stats.get("organic_carbon")
+        raw_texture = stats.get("texture_class")
+
+        return SoilProperties(
+            ph=round(raw_ph * OPENLANDMAP_PH_SCALE_FACTOR, 2) if raw_ph is not None else None,
+            organic_carbon_g_per_kg=(
+                round(raw_oc * OPENLANDMAP_ORGANIC_CARBON_SCALE_FACTOR, 1) if raw_oc is not None else None
+            ),
+            texture_class=USDA_TEXTURE_CLASS_NAMES.get(int(raw_texture)) if raw_texture is not None else None,
+        )
 
 
 def _build_client() -> EarthEngineClient:

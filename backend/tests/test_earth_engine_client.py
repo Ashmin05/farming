@@ -556,3 +556,167 @@ class TestGetFieldMapLayers:
         )
 
         assert result.stress_zones == []
+
+
+class TestGetEnvironmentDynamics:
+    """Mocks only the _get_info boundary -- same principle as the other
+    EarthEngineClient tests. Call order inside get_environment_dynamics is
+    fixed: rainfall (latest-date lookup, then windowed stats), then
+    temperature (one FeatureCollection getInfo), then soil moisture (one
+    Feature getInfo)."""
+
+    async def test_raises_not_configured_without_touching_ee(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = EarthEngineClient(project_id=None)
+
+        with pytest.raises(EarthEngineNotConfiguredError):
+            await client.get_environment_dynamics(
+                {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 8, 1)
+            )
+
+        fake_ee.ImageCollection.assert_not_called()
+
+    async def test_computes_rainfall_temperature_and_soil_moisture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        temperature_features = {
+            "features": [
+                {"type": "Feature", "properties": {"date": "2026-08-01", "temp_c": 30.0}},
+                {"type": "Feature", "properties": {"date": "2026-08-09", "temp_c": 36.5}},
+                {"type": "Feature", "properties": {"date": "2026-08-17", "temp_c": 33.0}},
+            ]
+        }
+        soil_moisture_feature = {"type": "Feature", "properties": {"date": "2026-08-15", "value": 0.23456}}
+
+        monkeypatch.setattr(
+            client,
+            "_get_info",
+            AsyncMock(
+                side_effect=[
+                    "2026-09-15",  # latest CHIRPS date
+                    {"mm_7d": 12.34, "mm_30d": 45.6, "mm_90d": 120.0, "mm_since_sowing": 200.05},
+                    temperature_features,
+                    soil_moisture_feature,
+                ]
+            ),
+        )
+
+        result = await client.get_environment_dynamics(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 8, 1)
+        )
+
+        assert result.rainfall.mm_7d == 12.3
+        assert result.rainfall.mm_30d == 45.6
+        assert result.rainfall.mm_90d == 120.0
+        assert result.rainfall.mm_since_sowing == 200.1
+        assert result.rainfall.as_of == date(2026, 9, 15)
+
+        assert result.temperature.hot_periods_60d == 1  # only 36.5 > 35.0
+        assert result.temperature.mean_lst_c == round((30.0 + 36.5 + 33.0) / 3, 1)
+        assert result.temperature.as_of == date(2026, 8, 17)
+
+        assert result.soil_moisture.surface_moisture == 0.235
+        assert result.soil_moisture.as_of == date(2026, 8, 15)
+
+    async def test_since_sowing_omitted_when_sowing_date_after_latest_chirps_date(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        monkeypatch.setattr(
+            client,
+            "_get_info",
+            AsyncMock(
+                side_effect=[
+                    "2026-09-15",
+                    {"mm_7d": 1.0, "mm_30d": 2.0, "mm_90d": 3.0},  # no mm_since_sowing key at all
+                    {"features": []},
+                    {"type": "Feature", "properties": {}},
+                ]
+            ),
+        )
+
+        result = await client.get_environment_dynamics(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 10, 1)
+        )
+
+        assert result.rainfall.mm_since_sowing is None
+
+    async def test_temperature_returns_none_mean_when_no_periods_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        monkeypatch.setattr(
+            client,
+            "_get_info",
+            AsyncMock(
+                side_effect=[
+                    "2026-09-15",
+                    {"mm_7d": 0.0, "mm_30d": 0.0, "mm_90d": 0.0, "mm_since_sowing": 0.0},
+                    {"features": []},
+                    {"type": "Feature", "properties": {}},
+                ]
+            ),
+        )
+
+        result = await client.get_environment_dynamics(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 8, 1)
+        )
+
+        assert result.temperature.mean_lst_c is None
+        assert result.temperature.hot_periods_60d == 0
+        assert result.soil_moisture.surface_moisture is None
+        assert result.soil_moisture.as_of is None
+
+
+class TestGetSoilProperties:
+    async def test_raises_not_configured_without_touching_ee(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = EarthEngineClient(project_id=None)
+
+        with pytest.raises(EarthEngineNotConfiguredError):
+            await client.get_soil_properties({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        fake_ee.Image.assert_not_called()
+
+    async def test_returns_scaled_ph_organic_carbon_and_texture_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        # raw pH x10, raw organic carbon (x5 -> g/kg), raw USDA texture class number
+        monkeypatch.setattr(
+            client, "_get_info", AsyncMock(return_value={"ph": 74, "organic_carbon": 2, "texture_class": 9})
+        )
+
+        result = await client.get_soil_properties({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        assert result.ph == 7.4
+        assert result.organic_carbon_g_per_kg == 10.0
+        assert result.texture_class == "Sandy Loam"
+
+    async def test_returns_none_fields_when_values_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value={}))
+
+        result = await client.get_soil_properties({"type": "Polygon", "coordinates": [[[0, 0]]]})
+
+        assert result.ph is None
+        assert result.organic_carbon_g_per_kg is None
+        assert result.texture_class is None
