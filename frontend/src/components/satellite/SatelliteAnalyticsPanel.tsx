@@ -1,41 +1,101 @@
 "use client";
 
 // ==============================================================================
-// 🛰️ SATELLITE ANALYTICS PANEL (NDVI, NDWI, STRESS ZONES, HISTORICAL GRAPH & QUALITY)
+// 🛰️ SATELLITE ANALYTICS PANEL (NDVI, NDWI, STRESS ZONES, HISTORICAL GRAPH)
 // ==============================================================================
 // Features:
-// - Remote Sensing Layer controller (RGB Satellite, NDVI, NDWI, Stress-zones)
-// - Current NDVI statistics (Mean, Min, Max, Vigour %, Canopy health distribution)
+// - Current NDVI/NDWI statistics (Mean, Min, Max, Canopy health distribution)
 // - NDVI Historical Trend Graph (Time series tracking crop vegetative progression)
+// - Canopy Health Distribution donut chart
 // - Field Stress-Zone diagnostic report
-// - Satellite Sensor & Data-Quality Indicator (Sentinel-2, cloud %, 10m resolution)
+// Layer selection, the map, and sensor/quality info live in SatellitePage.tsx
+// (they sit around the map, not below it) — this panel is everything below.
 // ==============================================================================
 
 import { useState } from "react";
 import { FarmSatellite } from "@/lib/stores/farmStore";
 import {
-  Satellite, Layers, Droplets, AlertTriangle, TrendingUp,
-  CheckCircle2, Info,
-  Activity, Calendar
+  Leaf, TrendingDown, TrendingUp, Droplets, AlertTriangle,
+  CheckCircle2, Activity
 } from "lucide-react";
 
 export type SatelliteMapLayer = "rgb" | "ndvi" | "ndwi" | "stress";
 
+function CanopyDonut({ satellite }: { satellite: FarmSatellite }) {
+  const radius = 46;
+  const strokeWidth = 16;
+  const circumference = 2 * Math.PI * radius;
+
+  const segments = [
+    { pct: satellite.healthyCanopyPercent, color: "#10b981" }, // emerald-500
+    { pct: satellite.moderateCanopyPercent, color: "#fbbf24" }, // amber-400
+    { pct: satellite.stressedCanopyPercent, color: "#ef4444" }, // red-500
+  ];
+
+  let cumulativePct = 0;
+
+  return (
+    <div className="flex items-center justify-center gap-6">
+      <div className="relative w-32 h-32 flex-shrink-0">
+        <svg viewBox="0 0 120 120" className="w-32 h-32 -rotate-90">
+          <circle cx="60" cy="60" r={radius} fill="none" stroke="#f1f5f4" strokeWidth={strokeWidth} />
+          {segments.map((seg, idx) => {
+            if (seg.pct <= 0) return null;
+            const segLength = (seg.pct / 100) * circumference;
+            const offset = -((cumulativePct / 100) * circumference);
+            cumulativePct += seg.pct;
+            return (
+              <circle
+                key={idx}
+                cx="60"
+                cy="60"
+                r={radius}
+                fill="none"
+                stroke={seg.color}
+                strokeWidth={strokeWidth}
+                strokeDasharray={`${segLength} ${circumference - segLength}`}
+                strokeDashoffset={offset}
+                strokeLinecap="butt"
+              />
+            );
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <span className="text-2xl font-extrabold text-farm-dark">{satellite.healthyCanopyPercent}%</span>
+          <span className="text-[11px] text-farm-muted font-medium">Healthy</span>
+        </div>
+      </div>
+
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: "#10b981" }} />
+          <span className="text-farm-muted">Healthy</span>
+          <span className="font-bold text-farm-dark ml-auto">{satellite.healthyCanopyPercent}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: "#fbbf24" }} />
+          <span className="text-farm-muted">Moderate</span>
+          <span className="font-bold text-farm-dark ml-auto">{satellite.moderateCanopyPercent}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: "#ef4444" }} />
+          <span className="text-farm-muted">Stressed</span>
+          <span className="font-bold text-farm-dark ml-auto">{satellite.stressedCanopyPercent}%</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SatelliteAnalyticsPanel({
-  farmName,
   crop,
   areaAcres,
   satellite,
-  activeLayer,
-  onLayerChange,
   isLive = false,
 }: {
-  farmName: string;
   crop: string;
   areaAcres: number;
   satellite: FarmSatellite;
-  activeLayer: SatelliteMapLayer;
-  onLayerChange: (layer: SatelliteMapLayer) => void;
   /** True when `satellite`'s current stats (NDVI/NDWI/canopy %/metadata) came
    * from a real Sentinel-2 analysis rather than demo data. The historical
    * trend graph and stress zones below stay demo either way — flagged
@@ -45,9 +105,9 @@ export default function SatelliteAnalyticsPanel({
   const [selectedPointIdx, setSelectedPointIdx] = useState<number | null>(null);
 
   // SVG dimensions for the historical graph
-  const graphWidth = 560;
+  const graphWidth = 460;
   const graphHeight = 160;
-  const paddingX = 40;
+  const paddingX = 36;
   const paddingY = 24;
 
   const points = satellite.history;
@@ -74,173 +134,7 @@ export default function SatelliteAnalyticsPanel({
 
   return (
     <div className="space-y-6">
-      {/* ── Layer Selector Bar ── */}
-      <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-farm-muted flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-farm-green" />
-              Multispectral Satellite Layer Mode
-            </h3>
-            <p className="text-xs text-farm-muted mt-0.5">Toggle satellite analysis view for {farmName}</p>
-          </div>
-
-          <div className="grid grid-cols-2 sm:flex gap-1.5 bg-farm-gray p-1 rounded-xl border border-farm-border-color">
-            <button
-              onClick={() => onLayerChange("rgb")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-                activeLayer === "rgb"
-                  ? "bg-white text-farm-dark shadow-xs"
-                  : "text-farm-muted hover:text-farm-dark"
-              }`}
-            >
-              <Satellite className="w-3.5 h-3.5 text-slate-500" />
-              <span>True-Color RGB</span>
-            </button>
-
-            <button
-              onClick={() => onLayerChange("ndvi")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-                activeLayer === "ndvi"
-                  ? "bg-emerald-600 text-white shadow-xs"
-                  : "text-farm-muted hover:text-emerald-700"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>NDVI (Vigour)</span>
-            </button>
-
-            <button
-              onClick={() => onLayerChange("ndwi")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-                activeLayer === "ndwi"
-                  ? "bg-sky-600 text-white shadow-xs"
-                  : "text-farm-muted hover:text-sky-700"
-              }`}
-            >
-              <Droplets className="w-3.5 h-3.5" />
-              <span>NDWI (Water)</span>
-            </button>
-
-            <button
-              onClick={() => onLayerChange("stress")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-                activeLayer === "stress"
-                  ? "bg-amber-600 text-white shadow-xs"
-                  : "text-farm-muted hover:text-amber-700"
-              }`}
-            >
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span>Stress Zones</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Legend for currently active layer */}
-        <div className="mt-3 pt-3 border-t border-farm-border-color/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-farm-dark">Colormap Legend:</span>
-            {activeLayer === "ndvi" && (
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-red-600 font-bold">Bare/Dead (0.1)</span>
-                <div className="w-28 h-3 rounded-full bg-gradient-to-r from-red-500 via-yellow-400 via-lime-400 to-emerald-700 border border-slate-200" />
-                <span className="text-[10px] text-emerald-800 font-bold">Dense Biomass (0.9)</span>
-              </div>
-            )}
-            {activeLayer === "ndwi" && (
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-amber-600 font-bold">Water Stressed (-0.2)</span>
-                <div className="w-28 h-3 rounded-full bg-gradient-to-r from-amber-400 via-sky-300 via-blue-500 to-indigo-700 border border-slate-200" />
-                <span className="text-[10px] text-blue-900 font-bold">High Moisture (+0.7)</span>
-              </div>
-            )}
-            {activeLayer === "stress" && (
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-[11px] text-red-600 font-semibold">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Severe Stress
-                </span>
-                <span className="flex items-center gap-1 text-[11px] text-amber-600 font-semibold">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Moderate Attention
-                </span>
-                <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-semibold">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Healthy Crop
-                </span>
-              </div>
-            )}
-            {activeLayer === "rgb" && (
-              <span className="text-farm-muted">High-resolution natural optical spectrum</span>
-            )}
-          </div>
-
-          <div className="text-[11px] text-farm-muted flex items-center gap-1">
-            <Info className="w-3.5 h-3.5 text-farm-green" />
-            <span>Updated with every Sentinel satellite pass</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Satellite Data-Quality & Sensor Indicator ── */}
-      <div className="bg-gradient-to-r from-slate-900 to-farm-dark text-white rounded-2xl p-4 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-emerald-400">
-              <Satellite className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-sm">{satellite.metadata.satelliteMission}</span>
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                    satellite.metadata.dataQualityConfidence >= 80
-                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                      : satellite.metadata.dataQualityConfidence >= 40
-                        ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
-                        : "bg-red-500/20 text-red-300 border-red-500/40"
-                  }`}
-                >
-                  {satellite.metadata.dataQualityConfidence}%{" "}
-                  {satellite.metadata.dataQualityConfidence >= 80
-                    ? "High Quality"
-                    : satellite.metadata.dataQualityConfidence >= 40
-                      ? "Moderate Quality"
-                      : "Low Quality (Cloudy)"}
-                </span>
-              </div>
-              <p className="text-xs text-white/70 mt-0.5">
-                Acquired: <strong>{satellite.metadata.acquisitionDate}</strong> · Spatial GSD: {satellite.metadata.spatialResolution}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4 text-xs">
-            <div className="text-right">
-              <p className="text-[10px] text-white/60">Cloud Cover</p>
-              <p
-                className={`font-bold ${
-                  satellite.metadata.cloudCoveragePercent < 20
-                    ? "text-emerald-400"
-                    : satellite.metadata.cloudCoveragePercent < 60
-                      ? "text-amber-400"
-                      : "text-red-400"
-                }`}
-              >
-                {satellite.metadata.cloudCoveragePercent}%{" "}
-                {satellite.metadata.cloudCoveragePercent < 20
-                  ? "(Clear Sky)"
-                  : satellite.metadata.cloudCoveragePercent < 60
-                    ? "(Partly Cloudy)"
-                    : "(Heavy Cloud)"}
-              </p>
-            </div>
-            <div className="text-right border-l border-white/10 pl-4">
-              <p className="text-[10px] text-white/60">Solar Elevation</p>
-              <p className="font-bold text-white">{satellite.metadata.sunElevationAngle}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Current NDVI Statistics Breakdown ── */}
+      {/* ── Current Statistics ── */}
       <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -255,194 +149,151 @@ export default function SatelliteAnalyticsPanel({
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-          <div className="p-3 bg-farm-gray rounded-xl text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-3.5 bg-farm-gray rounded-xl text-center">
+            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-1.5">
+              <Leaf className="w-4 h-4" />
+            </div>
             <p className="text-xs text-farm-muted">Mean NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.meanNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-emerald-600 font-semibold">Active canopy</span>
+            <span className="text-[10px] text-emerald-600 font-semibold">{satellite.canopyVigourLabel}</span>
           </div>
 
-          <div className="p-3 bg-farm-gray rounded-xl text-center">
+          <div className="p-3.5 bg-farm-gray rounded-xl text-center">
+            <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-1.5">
+              <TrendingDown className="w-4 h-4" />
+            </div>
             <p className="text-xs text-farm-muted">Min NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.minNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-amber-600 font-semibold">Pathways/furrows</span>
+            <span className="text-[10px] text-amber-600 font-semibold">Low</span>
           </div>
 
-          <div className="p-3 bg-farm-gray rounded-xl text-center">
+          <div className="p-3.5 bg-farm-gray rounded-xl text-center">
+            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-1.5">
+              <TrendingUp className="w-4 h-4" />
+            </div>
             <p className="text-xs text-farm-muted">Max NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.maxNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-emerald-700 font-semibold">Peak foliar core</span>
+            <span className="text-[10px] text-emerald-700 font-semibold">High</span>
           </div>
 
-          <div className="p-3 bg-sky-50 rounded-xl text-center border border-sky-200/60">
+          <div className="p-3.5 bg-sky-50 rounded-xl text-center border border-sky-200/60">
+            <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center mx-auto mb-1.5">
+              <Droplets className="w-4 h-4" />
+            </div>
             <p className="text-xs text-sky-700">Mean NDWI</p>
             <p className="text-xl font-bold text-sky-900">{satellite.ndwi.toFixed(2)}</p>
-            <span className="text-[10px] text-sky-600 font-semibold">Canopy water index</span>
-          </div>
-        </div>
-
-        {/* Canopy Health Percentage Bar */}
-        <div>
-          <div className="flex items-center justify-between text-xs mb-1.5 font-medium">
-            <span className="text-farm-dark">Canopy Health Distribution</span>
-            <span className="text-farm-muted">
-              {satellite.healthyCanopyPercent}% Healthy · {satellite.moderateCanopyPercent}% Moderate · {satellite.stressedCanopyPercent}% Stressed
-            </span>
-          </div>
-          <div className="h-3 w-full bg-farm-gray rounded-full overflow-hidden flex">
-            <div
-              className="bg-emerald-500 transition-all"
-              style={{ width: `${satellite.healthyCanopyPercent}%` }}
-              title={`Healthy: ${satellite.healthyCanopyPercent}%`}
-            />
-            <div
-              className="bg-amber-400 transition-all"
-              style={{ width: `${satellite.moderateCanopyPercent}%` }}
-              title={`Moderate: ${satellite.moderateCanopyPercent}%`}
-            />
-            <div
-              className="bg-red-500 transition-all"
-              style={{ width: `${satellite.stressedCanopyPercent}%` }}
-              title={`Stressed: ${satellite.stressedCanopyPercent}%`}
-            />
+            <span className="text-[10px] text-sky-600 font-semibold">Optimal</span>
           </div>
         </div>
       </div>
 
-      {/* ── Historical NDVI Trend Graph ── */}
-      <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-          <div>
+      {/* ── NDVI Trend + Canopy Health Distribution, side by side ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* NDVI Season Progression */}
+        <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs">
+          <div className="flex items-center justify-between gap-2 mb-4">
             <h3 className="font-bold text-farm-dark text-sm flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-600" />
-              NDVI Historical Season Progression Curve
+              NDVI Season Progression
               {isLive && (
                 <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-farm-gray text-farm-muted normal-case">
                   Demo trend
                 </span>
               )}
             </h3>
-            <p className="text-xs text-farm-muted">
-              Bi-weekly Sentinel passes since sowing vs. regional optimal benchmark curve for {crop}
-            </p>
+            <span className="text-[11px] font-semibold text-farm-muted bg-farm-gray px-2.5 py-1 rounded-lg flex-shrink-0">
+              Last 6 Months
+            </span>
           </div>
 
-          <div className="flex items-center gap-4 text-xs">
+          <div className="w-full overflow-x-auto">
+            <div className="min-w-[380px]">
+              <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="w-full h-40 overflow-visible">
+                {[0.2, 0.4, 0.6, 0.8].map((v) => {
+                  const y = graphHeight - paddingY - (v / maxNdvi) * (graphHeight - paddingY * 2);
+                  return (
+                    <g key={v}>
+                      <line x1={paddingX} y1={y} x2={graphWidth - paddingX} y2={y} stroke="#f1f5f9" strokeDasharray="4 4" />
+                      <text x={paddingX - 8} y={y + 3} fontSize="9" textAnchor="end" fill="#94a3b8">
+                        {v.toFixed(1)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <path d={benchmarkPath} fill="none" stroke="#cbd5e1" strokeWidth="2" strokeDasharray="4 4" />
+                <path d={ndviPath} fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" />
+
+                {coords.map((pt, idx) => {
+                  const isSelected = selectedPointIdx === idx;
+                  return (
+                    <g
+                      key={idx}
+                      className="cursor-pointer group"
+                      onMouseEnter={() => setSelectedPointIdx(idx)}
+                      onClick={() => setSelectedPointIdx(idx)}
+                    >
+                      <circle cx={pt.x} cy={pt.y} r={14} fill="transparent" />
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={isSelected ? 6 : 4}
+                        fill="#ffffff"
+                        stroke="#059669"
+                        strokeWidth={isSelected ? 3 : 2}
+                        className="transition-all"
+                      />
+                      <text
+                        x={pt.x}
+                        y={graphHeight - 4}
+                        fontSize="8.5"
+                        textAnchor="middle"
+                        fill={isSelected ? "#059669" : "#64748b"}
+                        fontWeight={isSelected ? "700" : "400"}
+                        className="transition-colors"
+                      >
+                        {pt.date}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 text-[11px] mt-2">
             <span className="flex items-center gap-1.5 font-semibold text-farm-dark">
               <span className="w-3 h-1 bg-emerald-600 rounded-full" /> Actual NDVI
             </span>
             <span className="flex items-center gap-1.5 text-farm-muted">
-              <span className="w-3 h-1 bg-slate-300 rounded-full stroke-dasharray" /> Optimal Benchmark
+              <span className="w-3 h-1 bg-slate-300 rounded-full" /> Regional Average
             </span>
           </div>
-        </div>
 
-        {/* Responsive SVG Graph Container */}
-        <div className="w-full overflow-x-auto">
-          <div className="min-w-[500px]">
-            <svg
-              viewBox={`0 0 ${graphWidth} ${graphHeight}`}
-              className="w-full h-44 overflow-visible"
-            >
-              {/* Grid lines */}
-              {[0.2, 0.4, 0.6, 0.8].map((v) => {
-                const y = graphHeight - paddingY - (v / maxNdvi) * (graphHeight - paddingY * 2);
-                return (
-                  <g key={v}>
-                    <line
-                      x1={paddingX}
-                      y1={y}
-                      x2={graphWidth - paddingX}
-                      y2={y}
-                      stroke="#f1f5f9"
-                      strokeDasharray="4 4"
-                    />
-                    <text
-                      x={paddingX - 8}
-                      y={y + 3}
-                      fontSize="9"
-                      textAnchor="end"
-                      fill="#94a3b8"
-                    >
-                      {v.toFixed(1)}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* Benchmark dashed curve */}
-              <path
-                d={benchmarkPath}
-                fill="none"
-                stroke="#cbd5e1"
-                strokeWidth="2"
-                strokeDasharray="4 4"
-              />
-
-              {/* Actual NDVI green curve */}
-              <path
-                d={ndviPath}
-                fill="none"
-                stroke="#059669"
-                strokeWidth="3"
-                strokeLinecap="round"
-              />
-
-              {/* Interactive Points */}
-              {coords.map((pt, idx) => {
-                const isSelected = selectedPointIdx === idx;
-                return (
-                  <g
-                    key={idx}
-                    className="cursor-pointer group"
-                    onMouseEnter={() => setSelectedPointIdx(idx)}
-                    onClick={() => setSelectedPointIdx(idx)}
-                  >
-                    {/* Invisible larger hit area to ensure stable cursor hover */}
-                    <circle cx={pt.x} cy={pt.y} r={16} fill="transparent" />
-                    <circle
-                      cx={pt.x}
-                      cy={pt.y}
-                      r={isSelected ? 6 : 4}
-                      fill="#ffffff"
-                      stroke="#059669"
-                      strokeWidth={isSelected ? 3 : 2}
-                      className="transition-all"
-                    />
-                    {/* Date label */}
-                    <text
-                      x={pt.x}
-                      y={graphHeight - 4}
-                      fontSize="9"
-                      textAnchor="middle"
-                      fill={isSelected ? "#059669" : "#64748b"}
-                      fontWeight={isSelected ? "700" : "400"}
-                      className="transition-colors"
-                    >
-                      {pt.date}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-        </div>
-
-        {/* Selected Data Point Callout */}
-        {activePoint && (
-          <div className="mt-3 p-3 bg-emerald-50/60 rounded-xl border border-emerald-200/60 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-emerald-700" />
+          {activePoint && (
+            <div className="mt-3 p-2.5 bg-emerald-50/60 rounded-xl border border-emerald-200/60 text-[11px] flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span>
-                <strong>{activePoint.date}</strong> · Crop Stage: <strong>{activePoint.stage}</strong>
+                <strong>{activePoint.date}</strong> · {activePoint.stage}
+              </span>
+              <span>
+                NDVI <strong className="text-emerald-800">{activePoint.ndvi.toFixed(2)}</strong>{" "}
+                <span className="text-farm-muted">vs. benchmark {activePoint.benchmark.toFixed(2)}</span>
               </span>
             </div>
-            <div className="flex items-center gap-4">
-              <span>Recorded NDVI: <strong className="text-emerald-800">{activePoint.ndvi.toFixed(2)}</strong></span>
-              <span className="text-farm-muted">Target Benchmark: {activePoint.benchmark.toFixed(2)}</span>
-            </div>
+          )}
+        </div>
+
+        {/* Canopy Health Distribution Donut */}
+        <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs flex flex-col">
+          <h3 className="font-bold text-farm-dark text-sm flex items-center gap-2 mb-4">
+            <Leaf className="w-4 h-4 text-farm-green" />
+            Canopy Health Distribution
+          </h3>
+          <div className="flex-1 flex items-center justify-center py-2">
+            <CanopyDonut satellite={satellite} />
           </div>
-        )}
+        </div>
       </div>
 
       {/* ── Stress Zones Diagnostics ── */}
@@ -468,10 +319,7 @@ export default function SatelliteAnalyticsPanel({
         {satellite.stressZones.length > 0 ? (
           <div className="space-y-3">
             {satellite.stressZones.map((zone) => (
-              <div
-                key={zone.id}
-                className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-1.5"
-              >
+              <div key={zone.id} className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm text-farm-dark">{zone.name}</span>
