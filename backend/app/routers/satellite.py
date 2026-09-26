@@ -7,15 +7,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.deps import get_current_user
-from app.integrations.earth_engine_client import earth_engine_client
+from app.integrations.earth_engine_client import (
+    CHIRPS_RESOLUTION_LABEL,
+    MODIS_LST_RESOLUTION_LABEL,
+    OPENLANDMAP_RESOLUTION_LABEL,
+    SMAP_RESOLUTION_LABEL,
+    earth_engine_client,
+)
+from app.models.environment_snapshot import EnvironmentSnapshot
 from app.models.index_timeseries import IndexTimeseriesPoint
 from app.models.user import User
+from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
 from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.stress_zone_repository import StressZoneRepository
+from app.schemas.environment import (
+    EnvironmentReportResponse,
+    Provenance,
+    RainfallResponse,
+    SoilMoistureResponse,
+    SoilResponse,
+    TemperatureResponse,
+)
 from app.schemas.map_layers import SatelliteLayersResponse, StressZoneResponse, TileLayerUrls
 from app.schemas.satellite import SatelliteObservationResponse, observation_to_response
 from app.schemas.timeseries import TimeseriesPointResponse
@@ -39,6 +55,7 @@ def get_satellite_service(session: AsyncSession = Depends(get_db)) -> SatelliteS
         FarmAlertRepository(session),
         SatelliteLayerRepository(session),
         StressZoneRepository(session),
+        EnvironmentSnapshotRepository(session),
     )
 
 
@@ -152,6 +169,77 @@ async def get_satellite_layers(
             for zone in zones
         ],
     )
+
+
+def _environment_snapshot_to_response(farm_id: uuid.UUID, snapshot: EnvironmentSnapshot) -> EnvironmentReportResponse:
+    return EnvironmentReportResponse(
+        farm_id=farm_id,
+        rainfall=RainfallResponse(
+            mm_7d=snapshot.rainfall_7d_mm,
+            mm_30d=snapshot.rainfall_30d_mm,
+            mm_90d=snapshot.rainfall_90d_mm,
+            mm_since_sowing=snapshot.rainfall_since_sowing_mm,
+            provenance=Provenance(
+                source="CHIRPS Daily (UCSB-CHG/CHIRPS/DAILY)",
+                resolution=CHIRPS_RESOLUTION_LABEL,
+                as_of=snapshot.rainfall_as_of,
+            ),
+        ),
+        temperature=TemperatureResponse(
+            mean_lst_c=snapshot.mean_lst_c,
+            hot_periods_60d=snapshot.hot_periods_60d,
+            provenance=Provenance(
+                source="MODIS Land Surface Temperature (MODIS/061/MOD11A2)",
+                resolution=MODIS_LST_RESOLUTION_LABEL,
+                as_of=snapshot.temperature_as_of,
+            ),
+        ),
+        soil_moisture=SoilMoistureResponse(
+            surface_moisture=snapshot.soil_moisture,
+            provenance=Provenance(
+                source="NASA SMAP L4 (NASA/SMAP/SPL4SMGP/007)",
+                resolution=SMAP_RESOLUTION_LABEL,
+                as_of=snapshot.soil_moisture_as_of,
+            ),
+        ),
+        soil=SoilResponse(
+            ph=snapshot.soil_ph,
+            organic_carbon_g_per_kg=snapshot.soil_organic_carbon_g_per_kg,
+            texture_class=snapshot.soil_texture_class,
+            provenance=Provenance(
+                source="OpenLandMap soil layers",
+                resolution=OPENLANDMAP_RESOLUTION_LABEL,
+                as_of=snapshot.soil_fetched_at.date() if snapshot.soil_fetched_at else None,
+            ),
+        ),
+        generated_at=snapshot.generated_at,
+    )
+
+
+@router.get("/{farm_id}/environment", response_model=EnvironmentReportResponse)
+async def get_environment_report(
+    farm_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    farm_service: FarmService = Depends(get_farm_service),
+    satellite_service: SatelliteService = Depends(get_satellite_service),
+) -> EnvironmentReportResponse:
+    """Rainfall (CHIRPS), land-surface temperature (MODIS), soil moisture
+    (SMAP, regional) and static soil properties (OpenLandMap: pH, organic
+    carbon, USDA texture class) for this farm. Rainfall/temperature/soil
+    moisture are refreshed from Earth Engine on every call; soil properties
+    are fetched once and reused after that. Every section carries its own
+    provenance and native resolution."""
+    try:
+        farm = await farm_service.get_farm(current_user, farm_id)
+    except FarmNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
+
+    try:
+        snapshot = await satellite_service.environment_report(farm)
+    except SatelliteAnalysisError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    return _environment_snapshot_to_response(farm.id, snapshot)
 
 
 async def run_background_refresh(farm_id: uuid.UUID) -> None:

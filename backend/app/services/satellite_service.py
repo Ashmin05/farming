@@ -9,12 +9,14 @@ from app.integrations.earth_engine_client import (
     NoSentinelImageryAvailableError,
 )
 from app.ml.crop_benchmarks import benchmark_ndvi_for_crop
+from app.models.environment_snapshot import EnvironmentSnapshot
 from app.models.farm import Farm
 from app.models.farm_alert import FarmAlert
 from app.models.index_timeseries import IndexTimeseriesPoint
 from app.models.satellite_layer_set import SatelliteLayerSet
 from app.models.satellite_observation import SatelliteObservation
 from app.models.stress_zone import StressZone
+from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
 from app.repositories.satellite_layer_repository import SatelliteLayerRepository
@@ -54,6 +56,7 @@ class SatelliteService:
         farm_alert_repository: FarmAlertRepository | None = None,
         satellite_layer_repository: SatelliteLayerRepository | None = None,
         stress_zone_repository: StressZoneRepository | None = None,
+        environment_snapshot_repository: EnvironmentSnapshotRepository | None = None,
     ) -> None:
         self.satellite_repository = satellite_repository
         self.earth_engine_client = earth_engine_client
@@ -64,6 +67,7 @@ class SatelliteService:
         self.farm_alert_repository = farm_alert_repository
         self.satellite_layer_repository = satellite_layer_repository
         self.stress_zone_repository = stress_zone_repository
+        self.environment_snapshot_repository = environment_snapshot_repository
 
     async def get_latest(self, farm: Farm) -> SatelliteObservation | None:
         """Cache-only read -- never touches Earth Engine."""
@@ -290,3 +294,47 @@ class SatelliteService:
         )
         zones = await self.stress_zone_repository.replace_for_date(farm.id, target_date, result.stress_zones)
         return layer_set, zones
+
+    async def environment_report(self, farm: Farm) -> EnvironmentSnapshot:
+        """Rainfall/temperature/soil-moisture/soil report for `farm`.
+        Rainfall, temperature, and soil moisture are refreshed from Earth
+        Engine on every call (they change day to day); soil pH/organic
+        carbon/texture class are fetched only the first time this is ever
+        called for a farm and reused after that, since soil doesn't change.
+        """
+        assert self.environment_snapshot_repository is not None, "environment_snapshot_repository required"
+
+        try:
+            dynamics = await self.earth_engine_client.get_environment_dynamics(
+                farm.polygon_geojson, farm.sowing_date
+            )
+        except (EarthEngineNotConfiguredError, EarthEngineTimeoutError) as exc:
+            raise SatelliteAnalysisError(str(exc)) from exc
+
+        existing = await self.environment_snapshot_repository.get_by_farm(farm.id)
+        soil = None
+        if existing is None or existing.soil_fetched_at is None:
+            try:
+                soil = await self.earth_engine_client.get_soil_properties(farm.polygon_geojson)
+            except (EarthEngineNotConfiguredError, EarthEngineTimeoutError) as exc:
+                raise SatelliteAnalysisError(str(exc)) from exc
+
+        now = datetime.now(timezone.utc)
+        return await self.environment_snapshot_repository.upsert(
+            farm_id=farm.id,
+            rainfall_7d_mm=dynamics.rainfall.mm_7d,
+            rainfall_30d_mm=dynamics.rainfall.mm_30d,
+            rainfall_90d_mm=dynamics.rainfall.mm_90d,
+            rainfall_since_sowing_mm=dynamics.rainfall.mm_since_sowing,
+            rainfall_as_of=dynamics.rainfall.as_of,
+            mean_lst_c=dynamics.temperature.mean_lst_c,
+            hot_periods_60d=dynamics.temperature.hot_periods_60d,
+            temperature_as_of=dynamics.temperature.as_of,
+            soil_moisture=dynamics.soil_moisture.surface_moisture,
+            soil_moisture_as_of=dynamics.soil_moisture.as_of,
+            generated_at=now,
+            soil_ph=soil.ph if soil is not None else None,
+            soil_organic_carbon_g_per_kg=soil.organic_carbon_g_per_kg if soil is not None else None,
+            soil_texture_class=soil.texture_class if soil is not None else None,
+            soil_fetched_at=now if soil is not None else None,
+        )

@@ -28,9 +28,9 @@ future geospatial work on field boundaries).
 
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
-`satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`)
-were used during buildout and have all been merged into `main`, which is what's pushed to origin and
-described by this document. Notable merged work, roughly in order:
+`satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`,
+`farm-environment-report`) were used during buildout and have all been merged into `main`, which is
+what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
 - `profile_setup` — profile fields, `/profile` edit page, forgot/reset password (later removed).
@@ -62,6 +62,10 @@ described by this document. Notable merged work, roughly in order:
   or nutrient/pest-suspected and stored with area + a suggested action (§5.10). Wired end-to-end:
   the Satellite page's layer tabs now render the real raster overlay and stress-zone polygons on
   the map, not synthetic data.
+- `farm-environment-report` — a farm-level environment report beyond vegetation indices: rainfall
+  (CHIRPS), land-surface temperature (MODIS), soil moisture (SMAP, regional), and static soil
+  properties (OpenLandMap: pH, organic carbon, USDA texture class), each carrying its own
+  provenance and native resolution (§5.11). Backend-only so far, same as §5.6 before §5.7 existed.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -228,13 +232,15 @@ backend/
 │   │   ├── index_timeseries.py  # IndexTimeseriesPoint ORM model (§5.9)
 │   │   ├── farm_alert.py  # FarmAlert ORM model (§5.9)
 │   │   ├── satellite_layer_set.py  # SatelliteLayerSet ORM model — cached tile URLs (§5.10)
-│   │   └── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
+│   │   ├── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
+│   │   └── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
 │   │   ├── farm.py        # pydantic request/response models for /farms
 │   │   ├── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
 │   │   ├── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
-│   │   └── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
+│   │   ├── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
+│   │   └── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
 │   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
@@ -242,25 +248,26 @@ backend/
 │   │   ├── index_timeseries_repository.py  # DB queries for IndexTimeseriesPoint, incl. upsert
 │   │   ├── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
 │   │   ├── satellite_layer_repository.py  # DB queries for SatelliteLayerSet, incl. upsert (§5.10)
-│   │   └── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
+│   │   ├── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
+│   │   └── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10)
+│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
-│   │   └── satellite_service.py # business logic: analysis, timeseries, alert rules, map layers
+│   │   └── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
-│   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers + background-refresh helper
+│   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
 │   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
 │   ├── jobs/
 │   │   └── scheduler.py   # APScheduler nightly job: refresh every farm's timeseries + alerts (§5.9)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 108 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 119 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -291,6 +298,7 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | GET | `/farms/{farm_id}/alerts` | List detected anomalies for the farm (NDVI drop, below-benchmark, water stress), most recent first (§5.9) |
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 | GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
+| GET | `/farms/{farm_id}/environment` | Rainfall (CHIRPS), land-surface temperature (MODIS), soil moisture (SMAP, regional), and soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution (§5.11) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -567,10 +575,70 @@ the farm's map, plus automatically detected stress zones instead of a synthetic 
   spot-checking one tile URL directly returns a genuine small clipped PNG (the test farm is only
   ~1 hectare, so its clipped tiles are correctly tiny — a handful of colored pixels against an
   otherwise-transparent tile, invisible until zoomed into the farm itself). The same test farm's
-  heavy persistent cloud cover (§5.9's known limitation) means it has zero detected stress zones,
-  so zone polygon rendering + click popups are covered by the 7 backend unit tests in
-  `test_satellite_map_layers.py` rather than observed live end-to-end — same caveat as the nightly
-  scheduler in §10.
+  heavy persistent cloud cover (§5.9's known limitation) means it never has real detected stress
+  zones on its own — polygon rendering + click popups were verified live by seeding two synthetic
+  `StressZone` rows for it directly through the real `StressZoneRepository` (not raw SQL, not
+  mocked), confirming the map renders both zone colors and that clicking each shows the correct
+  type/area/action popup, then deleting the rows again to restore the farm's real (empty) state.
+
+### 5.11 Farm environment report (rainfall / temperature / soil moisture / soil)
+
+Moves beyond vegetation indices to the environmental context around a farm — four independent Earth
+Engine datasets, each with a very different native resolution and update cadence:
+
+- **Rainfall — CHIRPS Daily (`UCSB-CHG/CHIRPS/DAILY`)**: accumulated mm over the trailing 7/30/90
+  days and since `sowing_date` (capped at 365 days). CHIRPS's "final" product lags real time by
+  several weeks, so a naive "last 7 days from today" window can come back empty — windows are
+  anchored to the latest date actually present in the collection instead (one `_get_info` call to
+  find it, then one combined `reduceRegion` over all four windows built as separate bands of one
+  image, in a second call).
+- **Land-surface temperature — MODIS (`MODIS/061/MOD11A2`)**: mean °C and a count of 8-day
+  composites with field-mean LST above 35°C, over the trailing 60 days. Computed the same way as
+  the NDVI timeseries (§5.9) — one `.map()` over the collection producing a `FeatureCollection` of
+  per-period `{date, temp_c}`, one `getInfo()` for the whole window, individual masked/cloudy
+  periods dropped in Python rather than corrupting the average.
+- **Soil moisture — NASA SMAP L4 (`NASA/SMAP/SPL4SMGP/007`)**: latest available surface soil
+  moisture (m³/m³). This is the exact collection asked for, but it's flagged deprecated by Earth
+  Engine (superseded by `.../008`) and stopped receiving new data around mid-2025 — confirmed live,
+  the "latest" image for this project's test farm is dated 2025-06-27. Rather than silently treating
+  a year-old reading as current, `as_of` is always the real date of whatever image was actually used,
+  labelled `"~9-11 km regional"` in `resolution` so the UI can visually de-emphasize it next to the
+  10m-scale vegetation data.
+- **Soil — OpenLandMap (pH, organic carbon, USDA texture class)**: static, ~2017-vintage global
+  layers with no real acquisition date. **Fetched once per farm and reused after that** — as asked —
+  via `EnvironmentSnapshot.soil_fetched_at`: `SatelliteService.environment_report()` only calls
+  `EarthEngineClient.get_soil_properties()` when that column is still null, and the repository's
+  `upsert()` only overwrites the `soil_*` columns when the caller just fetched them, leaving them
+  untouched on every other call. The dynamic sections (rainfall/temperature/soil moisture) refresh
+  on every call — no caching layer for those, since they change day to day and the spec didn't ask
+  for one (contrast §5.10's explicit ~12h tile cache).
+- **A real, live-caught scale bug**: OpenLandMap's soil layers and each dynamic dataset's own native
+  pixel is far coarser than this project's ~1 hectare test farm polygon (SMAP ~11km, CHIRPS ~5.5km,
+  OpenLandMap 250m). Passing that native resolution as `reduceRegion`'s `scale` parameter made Earth
+  Engine's grid-sampling miss the polygon entirely and silently return `null` for rainfall/soil
+  moisture/soil pH — confirmed empirically live (`scale=5566` on the test farm → `None`; `scale=30`
+  on the identical call → the real value). Fixed by using a small fixed sampling scale
+  (`SMALL_FIELD_REDUCE_SCALE_M = 30`) for every environment `reduceRegion` call, which only changes
+  how finely Earth Engine resamples before reducing, not which pixel's value comes back for a region
+  this small — the dataset's true native resolution is still what's shown to the UI via each
+  section's own `provenance.resolution` string, a deliberately separate concern. MODIS wasn't
+  affected (its per-period map+filter approach already tolerates individual masked pixels).
+- OpenLandMap's organic-carbon scale factor isn't exposed via `getInfo()` (unlike pH, which is
+  documented as ×10); the ×5 factor used here (`OPENLANDMAP_ORGANIC_CARBON_SCALE_FACTOR`) was
+  determined empirically — the raw pixel value at the test farm, divided by 5, gives an implausibly
+  bare 0.4 g/kg, while multiplied by 5 gives 10 g/kg (1% organic carbon), a normal figure for real
+  cropland. Flagged in code in case an authoritative source turns up a different documented factor.
+- **`GET /farms/{id}/environment`**: builds all four sections and returns them with the `EnvironmentSnapshot`
+  row's values plus a `Provenance` (source, resolution, as-of date) per section, so the UI can show
+  e.g. "10 m field" next to a vegetation stat and "~10 km regional" next to soil moisture rather than
+  presenting every number as equally precise.
+- Live-verified end-to-end against the real test farm after the scale fix: 8.8mm/36.4mm/507.4mm
+  rainfall over 7/30/90 days (plausible for peak Maharashtra monsoon season), 25.2°C mean LST with 0
+  hot periods, 0.455 m³/m³ soil moisture (dated 2025-06-27, correctly surfaced as stale), and pH 7.4
+  / 10.0 g/kg organic carbon / "Clay" texture — then verified a second call reused the identical soil
+  values while rainfall's `as_of`/values still changed, confirming the "fetch once, reuse" caching
+  actually works live, not just in the mocked tests.
+- Not yet wired into the frontend — same status as §5.6 was before §5.7 existed, and §5.9 still is.
 
 ---
 
@@ -844,7 +912,8 @@ npm run dev    # http://localhost:3000
 | NDVI historical trend graph | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (§5.9) but nothing in the UI calls it yet |
 | Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
-| Soil pH/N-P-K, weather | ❌ Mock only — not satellite-derived at all, need a different data source |
+| Farm environment report (backend) | ✅ Real — `GET /farms/{id}/environment` returns live CHIRPS rainfall, MODIS land-surface temperature, SMAP soil moisture, and cached OpenLandMap soil pH/organic carbon/texture, each with its own provenance/resolution; see §5.11. Not yet wired into the frontend |
+| Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture now exist server-side (§5.11, not yet in the UI); N-P-K and weather are still not satellite-derived, need a different data source |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
@@ -869,10 +938,13 @@ npm run dev    # http://localhost:3000
 - **Surface `/farms/{id}/alerts` in the UI** — real alerts are generated nightly (§5.9) but nothing
   shows them to a farmer yet; a notification badge/list on Dashboard or Satellite would use this
   directly.
-- **Verify stress-zone rendering against a farm with real detected zones** — the test farm used for
-  live verification has persistent heavy cloud cover (below) and detects zero stress zones, so the
-  zone polygon fill/outline/click-popup code path (§5.10) is covered by unit tests only, not
-  observed live end-to-end yet.
+- **Wire `/farms/{id}/environment` (§5.11) into the frontend** — real rainfall/temperature/soil-
+  moisture/soil data exists server-side but the UI still shows synthetic soil pH/N-P-K values;
+  natural next step is a "Field Conditions" card on the Satellite or Dashboard page.
+- **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked
+  for, but Earth Engine flags it deprecated and it stopped updating around mid-2025; the response
+  already surfaces this honestly via `as_of` rather than hiding it, but the underlying collection
+  should move to `.../008` once that's confirmed to have the same `sm_surface` band and coverage.
 - **Verify the nightly scheduler job against farms with real historical cloud-free passes** — the
   alert rules (§5.9) are covered by 13 unit tests against a mocked `EarthEngineClient`, and the
   live Earth Engine integration itself was verified end-to-end, but the *combination* (a real farm
