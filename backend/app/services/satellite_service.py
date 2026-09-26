@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.core.satellite_health import compute_health_score, crop_stage_benchmark_ndvi, days_since
 from app.integrations.earth_engine_client import (
+    MAP_LAYERS_CACHE_HOURS,
     EarthEngineClient,
     EarthEngineNotConfiguredError,
     EarthEngineTimeoutError,
@@ -11,10 +12,14 @@ from app.ml.crop_benchmarks import benchmark_ndvi_for_crop
 from app.models.farm import Farm
 from app.models.farm_alert import FarmAlert
 from app.models.index_timeseries import IndexTimeseriesPoint
+from app.models.satellite_layer_set import SatelliteLayerSet
 from app.models.satellite_observation import SatelliteObservation
+from app.models.stress_zone import StressZone
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
+from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
+from app.repositories.stress_zone_repository import StressZoneRepository
 
 # Timeseries points with field cloud cover at/above this are dropped before
 # being stored -- too cloudy to trust for a trend line or alert.
@@ -47,14 +52,18 @@ class SatelliteService:
         earth_engine_client: EarthEngineClient,
         index_timeseries_repository: IndexTimeseriesRepository | None = None,
         farm_alert_repository: FarmAlertRepository | None = None,
+        satellite_layer_repository: SatelliteLayerRepository | None = None,
+        stress_zone_repository: StressZoneRepository | None = None,
     ) -> None:
         self.satellite_repository = satellite_repository
         self.earth_engine_client = earth_engine_client
         # Optional: only refresh_analysis()/get_latest() are usable without
         # these (existing callers, e.g. the on-farm-create background
-        # refresh, don't need the timeseries/alerts machinery at all).
+        # refresh, don't need the timeseries/alerts/map-layers machinery).
         self.index_timeseries_repository = index_timeseries_repository
         self.farm_alert_repository = farm_alert_repository
+        self.satellite_layer_repository = satellite_layer_repository
+        self.stress_zone_repository = stress_zone_repository
 
     async def get_latest(self, farm: Farm) -> SatelliteObservation | None:
         """Cache-only read -- never touches Earth Engine."""
@@ -225,3 +234,59 @@ class SatelliteService:
             detected_at=detected_at,
             message=message,
         )
+
+    async def get_or_build_layers(
+        self, farm: Farm, image_date: date | None
+    ) -> tuple[SatelliteLayerSet, list[StressZone]]:
+        """Returns cached tile URLs + stress zones for `farm` on
+        `image_date` (defaulting to the farm's latest known analysis date
+        when omitted), regenerating from Earth Engine only when nothing is
+        cached yet or the cached set is older than MAP_LAYERS_CACHE_HOURS.
+        """
+        assert self.satellite_layer_repository is not None, "satellite_layer_repository required"
+        assert self.stress_zone_repository is not None, "stress_zone_repository required"
+
+        target_date = image_date
+        if target_date is None:
+            latest = await self.get_latest(farm)
+            if latest is None:
+                raise SatelliteAnalysisError(
+                    "No satellite analysis yet for this farm. POST .../satellite/refresh to run one first."
+                )
+            target_date = latest.image_date
+
+        now = datetime.now(timezone.utc)
+        existing = await self.satellite_layer_repository.get_by_farm_and_date(farm.id, target_date)
+        # SQLite (used by the test suite) drops tzinfo on read even for a
+        # DateTime(timezone=True) column -- the stored value is still UTC,
+        # so treat a naive expires_at as UTC rather than erroring on the
+        # naive/aware comparison below.
+        expires_at = existing.expires_at if existing is not None else None
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if existing is not None and expires_at > now:
+            zones = await self.stress_zone_repository.list_by_farm_and_date(farm.id, target_date)
+            return existing, zones
+
+        try:
+            result = await self.earth_engine_client.get_field_map_layers(farm.polygon_geojson, target_date)
+        except (
+            EarthEngineNotConfiguredError,
+            EarthEngineTimeoutError,
+            NoSentinelImageryAvailableError,
+        ) as exc:
+            raise SatelliteAnalysisError(str(exc)) from exc
+
+        layer_set = await self.satellite_layer_repository.upsert(
+            farm_id=farm.id,
+            image_date=target_date,
+            true_color_tile_url=result.true_color_tile_url,
+            ndvi_tile_url=result.ndvi_tile_url,
+            ndwi_tile_url=result.ndwi_tile_url,
+            evi_tile_url=result.evi_tile_url,
+            stress_tile_url=result.stress_tile_url,
+            generated_at=now,
+            expires_at=now + timedelta(hours=MAP_LAYERS_CACHE_HOURS),
+        )
+        zones = await self.stress_zone_repository.replace_for_date(farm.id, target_date, result.stress_zones)
+        return layer_set, zones

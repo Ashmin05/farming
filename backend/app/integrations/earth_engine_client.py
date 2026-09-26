@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 20.0
 FIELD_ANALYSIS_TIMEOUT_SECONDS = 60.0  # reduceRegion over a whole collection is slower than a count
 TIMESERIES_TIMEOUT_SECONDS = 120.0  # up to ~120 days of scenes, two reduceRegions each
+MAP_LAYERS_TIMEOUT_SECONDS = 60.0  # 5 getMapId calls + one stress-zone vectorization getInfo
 
 # Per-field Sentinel-2 analysis (see EarthEngineClient.analyze_field).
 FIELD_ANALYSIS_WINDOW_DAYS = 45
@@ -32,6 +33,24 @@ NDVI_STRESSED_THRESHOLD = 0.3
 # SCL (Scene Classification Layer) classes to mask out: cloud shadow (3),
 # cloud medium probability (8), cloud high probability (9), thin cirrus (10).
 SCL_CLOUD_SHADOW_CLASSES = [3, 8, 9, 10]
+
+# Map tile visualization (EarthEngineClient.get_field_map_layers).
+TRUE_COLOR_VIS = {"min": 0, "max": 0.3}
+NDVI_VIS = {"min": 0, "max": 0.9, "palette": ["red", "yellow", "green"]}
+NDWI_VIS = {"min": -0.5, "max": 0.5, "palette": ["8B4513", "white", "0000FF"]}  # brown (dry) -> blue (wet)
+EVI_VIS = {"min": 0, "max": 1, "palette": ["red", "yellow", "green"]}
+STRESS_CLASS_VIS = {"min": 0, "max": 2, "palette": ["red", "orange", "green"]}  # 0=stressed 1=moderate 2=healthy
+
+# Stress-zone vectorization: a pixel is "stressed" if its NDVI is more than
+# this many standard deviations below the field's own mean NDVI (not a fixed
+# absolute threshold, since "stressed relative to this field" is what
+# matters for anomaly detection).
+STRESS_ZONE_STD_DEV_THRESHOLD = 1.0
+STRESS_ZONE_MIN_AREA_M2 = 200.0
+# Cached tile URLs are treated as stale after this long (see SatelliteService)
+# -- not because Earth Engine's own map tokens are known to expire this fast,
+# but as a conservative, simple cache-invalidation policy.
+MAP_LAYERS_CACHE_HOURS = 12
 
 # Roughly central India — used only by the health check to count recent
 # Sentinel-2 passes; the location itself has no other significance.
@@ -104,6 +123,42 @@ class TimeseriesPoint:
     ndvi_mean: float
     ndwi_mean: float
     evi_mean: float
+
+
+@dataclass
+class StressZoneResult:
+    """One detected stress zone, vectorized from pixels significantly below
+    the field's own mean NDVI. Not yet a DB row -- SatelliteService attaches
+    farm_id/image_date and persists it."""
+
+    zone_type: str  # "water_stress" | "nutrient_pest_suspected"
+    area_ha: float
+    geometry_geojson: dict
+    suggested_action: str
+
+
+@dataclass
+class FieldMapLayers:
+    """Visualised, farm-polygon-clipped Earth Engine tile URLs for one
+    scene, plus the stress zones vectorized from that same scene. From
+    EarthEngineClient.get_field_map_layers."""
+
+    image_date: date
+    true_color_tile_url: str
+    ndvi_tile_url: str
+    ndwi_tile_url: str
+    evi_tile_url: str
+    stress_tile_url: str
+    stress_zones: list[StressZoneResult]
+
+
+def _suggested_action(zone_type: str) -> str:
+    if zone_type == "water_stress":
+        return "Increase irrigation frequency in this zone and check for drainage or delivery issues."
+    return (
+        "Inspect this zone for nutrient deficiency or pest/disease pressure -- "
+        "consider a soil test or targeted scouting."
+    )
 
 
 def _short_satellite_name(spacecraft_name: str | None) -> str:
@@ -208,6 +263,25 @@ class EarthEngineClient:
         timeout, so it never blocks the event loop."""
         try:
             return await asyncio.wait_for(asyncio.to_thread(ee_object.getInfo), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise EarthEngineTimeoutError(
+                f"Earth Engine call did not complete within {timeout}s."
+            ) from exc
+
+    async def _get_map_id(
+        self, image, vis_params: dict, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
+    ) -> str:
+        """Runs the blocking EE `.getMapId()` call (which itself makes a
+        network request to mint a tile token) in a worker thread with a
+        timeout -- same principle as `_get_info`. Returns the XYZ tile URL
+        template (`tile_fetcher.url_format`)."""
+
+        def _call() -> str:
+            map_id = image.getMapId(vis_params)
+            return map_id["tile_fetcher"].url_format
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise EarthEngineTimeoutError(
                 f"Earth Engine call did not complete within {timeout}s."
@@ -490,6 +564,154 @@ class EarthEngineClient:
             )
         points.sort(key=lambda p: p.image_date)
         return points
+
+    async def get_field_map_layers(self, polygon_geojson: dict, image_date: date) -> FieldMapLayers:
+        """Builds visualised, farm-polygon-clipped Earth Engine tile layers
+        (true color, NDVI, NDWI, EVI, a healthy/moderate/stressed
+        classification) for the Sentinel-2 scene on `image_date`, plus
+        stress zones vectorized from that same scene.
+
+        Unlike analyze_field/build_field_timeseries, this targets one
+        *specific*, already-known date (normally the date of an existing
+        SatelliteObservation or IndexTimeseriesPoint) rather than selecting
+        a scene itself -- callers pick the date, this just renders it.
+        """
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+
+        geometry = ee.Geometry(polygon_geojson)
+        start = image_date.strftime("%Y-%m-%d")
+        end = (image_date + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        collection = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(geometry)
+            .filterDate(start, end)
+        )
+        count = await self._get_info(collection.size())
+        if not count:
+            raise NoSentinelImageryAvailableError(
+                f"No Sentinel-2 imagery found for this field on {image_date}."
+            )
+        image = ee.Image(collection.first())
+
+        scl = image.select("SCL")
+        keep_mask = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [0] * len(SCL_CLOUD_SHADOW_CLASSES), 1)
+        masked = image.updateMask(keep_mask)
+        scaled = masked.select(["B2", "B3", "B4", "B8", "B11"]).multiply(REFLECTANCE_SCALE)
+
+        ndvi = scaled.normalizedDifference(["B8", "B4"]).rename("NDVI")
+        ndwi = scaled.normalizedDifference(["B3", "B8"]).rename("NDWI")
+        evi = scaled.expression(
+            "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
+            {"NIR": scaled.select("B8"), "RED": scaled.select("B4"), "BLUE": scaled.select("B2")},
+        ).rename("EVI")
+
+        # Field-relative stress threshold: mean NDVI minus one standard
+        # deviation, both computed server-side and kept as lazy ee.Number
+        # objects -- no getInfo() needed just to build the classified tile,
+        # since Earth Engine's own tile server evaluates the whole graph
+        # (including this reduceRegion) per tile request.
+        ndvi_stats = ndvi.reduceRegion(
+            reducer=ee.Reducer.mean().combine(ee.Reducer.stdDev(), sharedInputs=True),
+            geometry=geometry,
+            scale=REGION_REDUCE_SCALE_M,
+            bestEffort=True,
+        )
+        mean_ndvi = ee.Number(ndvi_stats.get("NDVI_mean"))
+        std_ndvi = ee.Number(ndvi_stats.get("NDVI_stdDev"))
+        stress_threshold = mean_ndvi.subtract(std_ndvi.multiply(STRESS_ZONE_STD_DEV_THRESHOLD))
+
+        stressed_mask = ndvi.lt(stress_threshold)
+        moderate_mask = ndvi.gte(stress_threshold).And(ndvi.lt(mean_ndvi))
+        stress_class = (
+            ndvi.multiply(0).add(2).rename("stress_class")  # default: healthy (2)
+            .where(moderate_mask, 1)
+            .where(stressed_mask, 0)
+        )
+
+        true_color_img = masked.select(["B4", "B3", "B2"]).multiply(REFLECTANCE_SCALE).clip(geometry)
+        ndvi_img = ndvi.clip(geometry)
+        ndwi_img = ndwi.clip(geometry)
+        evi_img = evi.clip(geometry)
+        stress_img = stress_class.clip(geometry)
+
+        true_color_url, ndvi_url, ndwi_url, evi_url, stress_url = await asyncio.gather(
+            self._get_map_id(true_color_img, TRUE_COLOR_VIS, timeout=MAP_LAYERS_TIMEOUT_SECONDS),
+            self._get_map_id(ndvi_img, NDVI_VIS, timeout=MAP_LAYERS_TIMEOUT_SECONDS),
+            self._get_map_id(ndwi_img, NDWI_VIS, timeout=MAP_LAYERS_TIMEOUT_SECONDS),
+            self._get_map_id(evi_img, EVI_VIS, timeout=MAP_LAYERS_TIMEOUT_SECONDS),
+            self._get_map_id(stress_img, STRESS_CLASS_VIS, timeout=MAP_LAYERS_TIMEOUT_SECONDS),
+        )
+
+        stress_zones = await self._vectorize_stress_zones(
+            geometry=geometry, stressed_mask=stressed_mask, ndwi=ndwi
+        )
+
+        return FieldMapLayers(
+            image_date=image_date,
+            true_color_tile_url=true_color_url,
+            ndvi_tile_url=ndvi_url,
+            ndwi_tile_url=ndwi_url,
+            evi_tile_url=evi_url,
+            stress_tile_url=stress_url,
+            stress_zones=stress_zones,
+        )
+
+    async def _vectorize_stress_zones(self, *, geometry, stressed_mask, ndwi) -> list[StressZoneResult]:
+        """Converts the stressed-pixel mask into polygons (one per connected
+        cluster of stressed pixels), classifies each by its own mean NDWI,
+        and drops anything under STRESS_ZONE_MIN_AREA_M2. Everything --
+        vectorization, per-zone area, per-zone NDWI -- happens server-side
+        in one lazy graph; only the final result crosses the network via a
+        single getInfo() call (never one round trip per zone)."""
+
+        def _classify(feature):
+            zone_geom = feature.geometry()
+            area_m2 = zone_geom.area(1)
+            zone_ndwi_mean = ndwi.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=zone_geom,
+                scale=REGION_REDUCE_SCALE_M,
+                bestEffort=True,
+            ).get("NDWI")
+            return feature.set({"area_m2": area_m2, "ndwi_mean": zone_ndwi_mean})
+
+        vectors = (
+            stressed_mask.selfMask()
+            .reduceToVectors(
+                geometry=geometry,
+                scale=REGION_REDUCE_SCALE_M,
+                geometryType="polygon",
+                eightConnected=True,
+                maxPixels=1e8,
+                bestEffort=True,
+            )
+            .map(_classify)
+            .filter(ee.Filter.gte("area_m2", STRESS_ZONE_MIN_AREA_M2))
+        )
+
+        raw = await self._get_info(vectors, timeout=MAP_LAYERS_TIMEOUT_SECONDS)
+        features = (raw or {}).get("features", [])
+
+        zones: list[StressZoneResult] = []
+        for feature in features:
+            props = feature.get("properties", {})
+            area_m2 = props.get("area_m2")
+            zone_geometry = feature.get("geometry")
+            if area_m2 is None or zone_geometry is None:
+                continue
+            ndwi_mean = props.get("ndwi_mean")
+            zone_type = "water_stress" if (ndwi_mean is not None and ndwi_mean < 0) else "nutrient_pest_suspected"
+            zones.append(
+                StressZoneResult(
+                    zone_type=zone_type,
+                    area_ha=round(area_m2 / 10000, 4),
+                    geometry_geojson=zone_geometry,
+                    suggested_action=_suggested_action(zone_type),
+                )
+            )
+        return zones
 
 
 def _build_client() -> EarthEngineClient:

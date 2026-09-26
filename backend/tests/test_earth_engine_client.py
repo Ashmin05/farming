@@ -450,3 +450,109 @@ class TestBuildFieldTimeseries:
         # NDWI/EVI were null for this scene -- defaulted to 0.0 rather than crashing.
         assert points[0].ndwi_mean == 0.0
         assert points[0].evi_mean == 0.0
+
+
+class TestSuggestedAction:
+    def test_water_stress_gets_irrigation_advice(self) -> None:
+        assert "irrigation" in eec._suggested_action("water_stress").lower()
+
+    def test_nutrient_pest_gets_scouting_advice(self) -> None:
+        action = eec._suggested_action("nutrient_pest_suspected").lower()
+        assert "soil test" in action or "scouting" in action
+
+
+class TestGetFieldMapLayers:
+    """Mocks only the _get_info and _get_map_id boundaries -- same
+    principle as TestAnalyzeField/TestBuildFieldTimeseries."""
+
+    async def test_raises_not_configured_without_touching_ee(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = EarthEngineClient(project_id=None)
+
+        with pytest.raises(EarthEngineNotConfiguredError):
+            await client.get_field_map_layers({"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 9, 15))
+
+        fake_ee.ImageCollection.assert_not_called()
+
+    async def test_raises_when_no_imagery_for_that_date(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+        monkeypatch.setattr(client, "_get_info", AsyncMock(return_value=0))
+
+        with pytest.raises(NoSentinelImageryAvailableError):
+            await client.get_field_map_layers({"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 9, 15))
+
+    async def test_returns_tile_urls_and_classified_stress_zones(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        zones_raw = {
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [0, 0]]]},
+                    "properties": {"area_m2": 500.0, "ndwi_mean": -0.1},
+                },
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [[[2, 2], [2, 3], [3, 3], [2, 2]]]},
+                    "properties": {"area_m2": 300.0, "ndwi_mean": 0.2},
+                },
+            ]
+        }
+        # First _get_info call is the scene-existence count, second is the
+        # stress-zone vectorization result.
+        monkeypatch.setattr(client, "_get_info", AsyncMock(side_effect=[1, zones_raw]))
+        monkeypatch.setattr(
+            client,
+            "_get_map_id",
+            AsyncMock(
+                side_effect=[
+                    "https://tile/true_color/{z}/{x}/{y}",
+                    "https://tile/ndvi/{z}/{x}/{y}",
+                    "https://tile/ndwi/{z}/{x}/{y}",
+                    "https://tile/evi/{z}/{x}/{y}",
+                    "https://tile/stress/{z}/{x}/{y}",
+                ]
+            ),
+        )
+
+        result = await client.get_field_map_layers(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 9, 15)
+        )
+
+        assert result.image_date == date(2026, 9, 15)
+        assert result.true_color_tile_url == "https://tile/true_color/{z}/{x}/{y}"
+        assert result.ndvi_tile_url == "https://tile/ndvi/{z}/{x}/{y}"
+        assert result.ndwi_tile_url == "https://tile/ndwi/{z}/{x}/{y}"
+        assert result.evi_tile_url == "https://tile/evi/{z}/{x}/{y}"
+        assert result.stress_tile_url == "https://tile/stress/{z}/{x}/{y}"
+
+        assert len(result.stress_zones) == 2
+        assert result.stress_zones[0].zone_type == "water_stress"  # ndwi_mean -0.1 < 0
+        assert result.stress_zones[0].area_ha == 0.05  # 500 m2 / 10000
+        assert result.stress_zones[1].zone_type == "nutrient_pest_suspected"  # ndwi_mean 0.2 >= 0
+        assert result.stress_zones[1].area_ha == 0.03  # 300 m2 / 10000
+
+    async def test_drops_zones_missing_geometry_or_area(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_ee = MagicMock()
+        monkeypatch.setattr(eec, "ee", fake_ee)
+        client = _configured_client_for_analysis()
+
+        zones_raw = {
+            "features": [
+                {"type": "Feature", "geometry": None, "properties": {"area_m2": 500.0, "ndwi_mean": -0.1}},
+                {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": []}, "properties": {"ndwi_mean": -0.1}},
+            ]
+        }
+        monkeypatch.setattr(client, "_get_info", AsyncMock(side_effect=[1, zones_raw]))
+        monkeypatch.setattr(client, "_get_map_id", AsyncMock(side_effect=["a", "b", "c", "d", "e"]))
+
+        result = await client.get_field_map_layers(
+            {"type": "Polygon", "coordinates": [[[0, 0]]]}, date(2026, 9, 15)
+        )
+
+        assert result.stress_zones == []

@@ -20,11 +20,19 @@ import AppLayout from "@/components/AppLayout";
 import MapView from "@/components/map/MapView";
 import { useFarmStore, applyLiveSatellite } from "@/lib/stores/farmStore";
 import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
+import { useFarmSatelliteLayers } from "@/lib/hooks/useFarmSatelliteLayers";
 import SatelliteAnalyticsPanel, { SatelliteMapLayer } from "@/components/satellite/SatelliteAnalyticsPanel";
 import {
   MapPin, Satellite, Droplets, Camera, AlertTriangle,
   ChevronLeft, ChevronDown, Plus, RefreshCw, BadgeCheck, Loader2, Calendar
 } from "lucide-react";
+
+const TILE_KEY_BY_LAYER: Record<SatelliteMapLayer, "true_color" | "ndvi" | "ndwi" | "stress"> = {
+  rgb: "true_color",
+  ndvi: "ndvi",
+  ndwi: "ndwi",
+  stress: "stress",
+};
 
 const LAYERS: { key: SatelliteMapLayer; label: string; icon: typeof Satellite }[] = [
   { key: "ndvi", label: "NDVI (Vegetation)", icon: Satellite },
@@ -67,6 +75,11 @@ function SatelliteContent() {
     refreshError,
     refresh: refreshSatellite,
   } = useFarmSatelliteAnalysis(selectedFarm?.id);
+
+  const {
+    layers,
+    isLoading: layersLoading,
+  } = useFarmSatelliteLayers(selectedFarm?.id, observation?.provenance.as_of);
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render nothing rather than flash it.
@@ -158,7 +171,31 @@ function SatelliteContent() {
 
       {/* ── Map Card with Overlay Badges ── */}
       <div className="relative rounded-3xl overflow-hidden border border-farm-border-color shadow-card bg-white">
-        <MapView height="440px" flyToCenter={selectedFarm.center} showDrawControls={false} />
+        <MapView
+          height="440px"
+          flyToCenter={selectedFarm.center}
+          showDrawControls={false}
+          rasterTileUrl={layers?.layers[TILE_KEY_BY_LAYER[activeLayer]] ?? null}
+          stressZones={
+            activeLayer === "stress"
+              ? layers?.stress_zones.map((zone) => ({
+                  id: zone.id,
+                  type: zone.zone_type,
+                  areaHa: zone.area_ha,
+                  geometry: zone.geometry_geojson,
+                  action: zone.suggested_action,
+                }))
+              : undefined
+          }
+        />
+
+        {/* Live raster layer loading indicator */}
+        {isRealFarm && layersLoading && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-slate-900/85 backdrop-blur-sm text-white px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Loading satellite imagery…
+          </div>
+        )}
 
         {/* Location badge (top-left) */}
         <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-3.5 py-2 shadow-md flex items-center gap-2 max-w-[75%]">
@@ -189,9 +226,30 @@ function SatelliteContent() {
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-red-500 flex-shrink-0" /> Stressed
             </div>
+            {activeLayer === "stress" && layers && layers.stress_zones.length > 0 && (
+              <>
+                <div className="border-t border-farm-border-color my-1 pt-1.5 text-[10px] text-farm-muted font-bold uppercase tracking-wide">
+                  Zone outlines
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-sky-500 flex-shrink-0" /> Water Stress
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-orange-500 flex-shrink-0" /> Nutrient/Pest
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
+
+      {/* Real stress-zone count + click hint (only when there's something to click) */}
+      {activeLayer === "stress" && layers && layers.stress_zones.length > 0 && (
+        <p className="text-xs text-farm-muted px-1 -mt-2">
+          {layers.stress_zones.length} stress {layers.stress_zones.length === 1 ? "zone" : "zones"} detected
+          from live Sentinel-2 data — click an outlined area on the map for details.
+        </p>
+      )}
 
       {/* ── Caption line ── */}
       <div className="flex items-start gap-2 px-1">

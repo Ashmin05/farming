@@ -95,3 +95,46 @@ export async function getLatestSatelliteAnalysis(farmId: string): Promise<Satell
 export async function refreshSatelliteAnalysis(farmId: string): Promise<SatelliteObservation> {
   return satelliteFetch<SatelliteObservation>(farmId, "/refresh", { method: "POST" });
 }
+
+export interface TileLayerUrls {
+  true_color: string;
+  ndvi: string;
+  ndwi: string;
+  evi: string;
+  stress: string;
+}
+
+export interface StressZone {
+  id: string;
+  zone_type: "water_stress" | "nutrient_pest_suspected";
+  area_ha: number;
+  geometry_geojson: GeoJSON.Geometry;
+  suggested_action: string;
+}
+
+export interface SatelliteLayers {
+  farm_id: string;
+  image_date: string; // ISO date
+  layers: TileLayerUrls;
+  generated_at: string;
+  expires_at: string;
+  stress_zones: StressZone[];
+}
+
+/**
+ * Visualised, farm-polygon-clipped Sentinel-2 tile URLs (true color, NDVI,
+ * NDWI, EVI, stress classification) plus vectorized stress zones for one
+ * scene. Backend-cached for ~12h; can be a real Earth Engine round trip
+ * (several seconds), not just a cache read, so callers should show a
+ * loading state. Returns `null` when no analysis has run yet for this farm
+ * (an expected state for a brand-new farm) instead of throwing.
+ */
+export async function getSatelliteLayers(farmId: string, date?: string): Promise<SatelliteLayers | null> {
+  const query = date ? `?date=${encodeURIComponent(date)}` : "";
+  try {
+    return await satelliteFetch<SatelliteLayers>(farmId, `/layers${query}`);
+  } catch (err) {
+    if (err instanceof SatelliteApiError && err.status === 503) return null;
+    throw err;
+  }
+}
