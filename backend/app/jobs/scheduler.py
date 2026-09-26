@@ -1,9 +1,12 @@
-"""Nightly job: for every farm, check for new clear Sentinel-2 passes and
-update its NDVI/NDWI/EVI timeseries + alerts.
+"""Nightly jobs, run on the existing asyncio event loop via AsyncIOScheduler
+-- no separate process or thread pool needed:
 
-Started once at FastAPI startup (see app/main.py's lifespan) via
-AsyncIOScheduler, which runs jobs directly on the existing asyncio event
-loop -- no separate process or thread pool needed.
+1. For every farm, check for new clear Sentinel-2 passes and update its
+   NDVI/NDWI/EVI timeseries + alerts.
+2. For every farm, refresh its environment report (rainfall/temperature/
+   soil moisture; soil properties only on a farm's first-ever refresh).
+
+Started once at FastAPI startup (see app/main.py's lifespan).
 """
 
 import logging
@@ -13,6 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.database import AsyncSessionLocal
 from app.integrations.earth_engine_client import earth_engine_client
+from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
@@ -21,7 +25,8 @@ from app.services.satellite_service import SatelliteAnalysisError, SatelliteServ
 
 logger = logging.getLogger(__name__)
 
-JOB_ID = "nightly_satellite_timeseries_refresh"
+TIMESERIES_JOB_ID = "nightly_satellite_timeseries_refresh"
+ENVIRONMENT_JOB_ID = "nightly_environment_refresh"
 
 scheduler = AsyncIOScheduler()
 
@@ -64,18 +69,61 @@ async def run_nightly_timeseries_refresh() -> None:
         )
 
 
+async def run_nightly_environment_refresh() -> None:
+    """Refreshes every farm's environment report (rainfall/temperature/soil
+    moisture; soil pH/organic carbon/texture only on a farm's first-ever
+    refresh -- see SatelliteService.refresh_environment). Same
+    skip-quietly/skip-one-farm error handling as the timeseries job."""
+    if not earth_engine_client.configured:
+        logger.info("Nightly environment refresh job skipped -- Earth Engine not configured.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        farm_repository = FarmRepository(session)
+        satellite_service = SatelliteService(
+            SatelliteRepository(session),
+            earth_engine_client,
+            environment_snapshot_repository=EnvironmentSnapshotRepository(session),
+        )
+
+        farms = await farm_repository.list_all()
+        logger.info("Nightly environment refresh job starting for %d farm(s).", len(farms))
+
+        refreshed = 0
+        for farm in farms:
+            try:
+                await satellite_service.refresh_environment(farm)
+                refreshed += 1
+            except SatelliteAnalysisError as exc:
+                logger.info("Environment refresh skipped for farm %s: %s", farm.id, exc)
+            except Exception:  # noqa: BLE001 -- one bad farm must not kill the batch
+                logger.exception("Unexpected error refreshing environment for farm %s", farm.id)
+
+        logger.info(
+            "Nightly environment refresh job finished: %d/%d farm(s) refreshed.",
+            refreshed,
+            len(farms),
+        )
+
+
 def start_scheduler() -> None:
     """Call once at app startup. Safe to call more than once -- a job with
     the same id replaces the previous registration instead of duplicating."""
     scheduler.add_job(
         run_nightly_timeseries_refresh,
         trigger=CronTrigger(hour=2, minute=0),  # 02:00 server time -- a quiet, low-traffic window
-        id=JOB_ID,
+        id=TIMESERIES_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_nightly_environment_refresh,
+        trigger=CronTrigger(hour=2, minute=30),  # staggered after the timeseries job, same reasoning
+        id=ENVIRONMENT_JOB_ID,
         replace_existing=True,
     )
     if not scheduler.running:
         scheduler.start()
-        logger.info("Satellite timeseries scheduler started (nightly at 02:00).")
+        logger.info("Satellite scheduler started (timeseries nightly at 02:00, environment at 02:30).")
 
 
 def stop_scheduler() -> None:

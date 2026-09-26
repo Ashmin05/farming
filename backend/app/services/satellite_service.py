@@ -295,12 +295,22 @@ class SatelliteService:
         zones = await self.stress_zone_repository.replace_for_date(farm.id, target_date, result.stress_zones)
         return layer_set, zones
 
-    async def environment_report(self, farm: Farm) -> EnvironmentSnapshot:
+    async def get_environment(self, farm: Farm) -> EnvironmentSnapshot | None:
+        """Cache-only read of the farm's environment snapshot -- never
+        touches Earth Engine. Populated by refresh_environment, normally via
+        the nightly scheduler job (app/jobs/scheduler.py)."""
+        assert self.environment_snapshot_repository is not None, "environment_snapshot_repository required"
+        return await self.environment_snapshot_repository.get_by_farm(farm.id)
+
+    async def refresh_environment(self, farm: Farm) -> EnvironmentSnapshot:
         """Rainfall/temperature/soil-moisture/soil report for `farm`.
         Rainfall, temperature, and soil moisture are refreshed from Earth
         Engine on every call (they change day to day); soil pH/organic
         carbon/texture class are fetched only the first time this is ever
         called for a farm and reused after that, since soil doesn't change.
+        Called by the nightly scheduler job for every farm -- GET
+        /farms/{id}/environment itself only reads the cached result (see
+        get_environment), the same split as build_timeseries/get_timeseries.
         """
         assert self.environment_snapshot_repository is not None, "environment_snapshot_repository required"
 
