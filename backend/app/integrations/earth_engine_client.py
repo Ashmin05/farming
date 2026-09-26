@@ -261,7 +261,7 @@ class EarthEngineClient:
         def _tag_field_cloud_pct(image):
             scl = image.select("SCL")
             is_cloudy = scl.remap(SCL_CLOUD_SHADOW_CLASSES, [1] * len(SCL_CLOUD_SHADOW_CLASSES), 0)
-            cloud_fraction = (
+            raw_cloud_fraction = (
                 is_cloudy.rename("cloud")
                 .reduceRegion(
                     reducer=ee.Reducer.mean(),
@@ -271,6 +271,19 @@ class EarthEngineClient:
                 )
                 .get("cloud")
             )
+            # reduceRegion always includes the "cloud" key in its output, but
+            # its VALUE is null whenever this particular scene has zero
+            # pixels actually intersecting the field at the pixel-grid level
+            # (its bounding footprint can still pass filterBounds while the
+            # field falls in a gap between swaths, or right at a tile edge).
+            # Unlike a genuinely missing key, dict.get(key, default) does
+            # NOT rescue a present-but-null value -- and neither does
+            # .unmask() on the source band, since there's no pixel grid
+            # there at all to unmask. ee.List(...).reduce(firstNonNull()) is
+            # EE's standard null-coalescing idiom for exactly this. Treating
+            # "no data" as maximally cloudy (1.0) also correctly excludes
+            # such a scene from selection unless it's the only candidate.
+            cloud_fraction = ee.List([raw_cloud_fraction, 1]).reduce(ee.Reducer.firstNonNull())
             return image.set("FIELD_CLOUD_PCT", ee.Number(cloud_fraction).multiply(100))
 
         # select([]) drops pixel bands (properties are untouched) so this
@@ -330,18 +343,29 @@ class EarthEngineClient:
         )
         result = await self._get_info(combined, timeout=FIELD_ANALYSIS_TIMEOUT_SECONDS)
 
+        # reduceRegion can legitimately return a key with a JSON `null` value
+        # (not an absent key) if the *selected* scene still has zero valid
+        # (unmasked) pixels for that particular band over the field -- e.g. a
+        # fallback scene with heavy but not total cloud cover concentrated
+        # over one band's swath. `dict.get(key, 0.0)` alone does NOT rescue a
+        # present-but-None value (only a missing key), so this explicitly
+        # treats both as "nothing detected" (0.0) rather than crashing.
+        def _stat(key: str) -> float:
+            value = result.get(key)
+            return 0.0 if value is None else value
+
         return FieldAnalysisResult(
             image_date=datetime.strptime(result["image_date"], "%Y-%m-%d").date(),
             satellite=_short_satellite_name(result.get("satellite")),
             cloud_pct=round(selected["cloud_pct"], 1),
             is_fallback=selected["is_fallback"],
-            ndvi=IndexStats(mean=result["NDVI_mean"], min=result["NDVI_min"], max=result["NDVI_max"]),
-            ndwi=IndexStats(mean=result["NDWI_mean"], min=result["NDWI_min"], max=result["NDWI_max"]),
-            evi=IndexStats(mean=result["EVI_mean"], min=result["EVI_min"], max=result["EVI_max"]),
-            ndmi=IndexStats(mean=result["NDMI_mean"], min=result["NDMI_min"], max=result["NDMI_max"]),
-            healthy_pct=round(result.get("healthy", 0.0) * 100, 1),
-            moderate_pct=round(result.get("moderate", 0.0) * 100, 1),
-            stressed_pct=round(result.get("stressed", 0.0) * 100, 1),
+            ndvi=IndexStats(mean=_stat("NDVI_mean"), min=_stat("NDVI_min"), max=_stat("NDVI_max")),
+            ndwi=IndexStats(mean=_stat("NDWI_mean"), min=_stat("NDWI_min"), max=_stat("NDWI_max")),
+            evi=IndexStats(mean=_stat("EVI_mean"), min=_stat("EVI_min"), max=_stat("EVI_max")),
+            ndmi=IndexStats(mean=_stat("NDMI_mean"), min=_stat("NDMI_min"), max=_stat("NDMI_max")),
+            healthy_pct=round(_stat("healthy") * 100, 1),
+            moderate_pct=round(_stat("moderate") * 100, 1),
+            stressed_pct=round(_stat("stressed") * 100, 1),
         )
 
     @staticmethod

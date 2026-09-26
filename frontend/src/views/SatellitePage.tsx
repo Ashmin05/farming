@@ -19,11 +19,12 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
 import MapView from "@/components/map/MapView";
-import { useFarmStore, Farm } from "@/lib/stores/farmStore";
+import { useFarmStore, Farm, applyLiveSatellite } from "@/lib/stores/farmStore";
+import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import SatelliteAnalyticsPanel, { SatelliteMapLayer } from "@/components/satellite/SatelliteAnalyticsPanel";
 import {
   MapPin, Leaf, Calendar, Droplets, Satellite, AlertTriangle,
-  ChevronRight, Plus
+  ChevronRight, Plus, RefreshCw, BadgeCheck, Loader2
 } from "lucide-react";
 
 // ── Left Panel Farm Card ──────────────────────────────────────────────────────
@@ -109,6 +110,15 @@ function SatelliteContent() {
 
   const selectedFarm = farms.find((f) => f.id === selectedId) || farms[0];
 
+  const {
+    isRealFarm,
+    observation,
+    isLoading: satelliteLoading,
+    isRefreshing,
+    refreshError,
+    refresh: refreshSatellite,
+  } = useFarmSatelliteAnalysis(selectedFarm?.id);
+
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render nothing rather than flash it.
   if (!mounted) {
@@ -130,6 +140,10 @@ function SatelliteContent() {
       </div>
     );
   }
+
+  const displaySatellite = observation
+    ? applyLiveSatellite(selectedFarm.satellite, observation)
+    : selectedFarm.satellite;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">
@@ -215,33 +229,81 @@ function SatelliteContent() {
                     {activeLayer === "ndvi" && (
                       <>
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="text-emerald-300 font-bold">NDVI Vegetation Vigour (Mean: {selectedFarm.satellite.meanNdvi.toFixed(2)})</span>
+                        <span className="text-emerald-300 font-bold">NDVI Vegetation Vigour (Mean: {displaySatellite.meanNdvi.toFixed(2)})</span>
                       </>
                     )}
                     {activeLayer === "ndwi" && (
                       <>
                         <Droplets className="w-3.5 h-3.5 text-sky-400" />
-                        <span className="text-sky-300 font-bold">NDWI Canopy Moisture (Index: +{selectedFarm.satellite.ndwi.toFixed(2)})</span>
+                        <span className="text-sky-300 font-bold">NDWI Canopy Moisture (Index: +{displaySatellite.ndwi.toFixed(2)})</span>
                       </>
                     )}
                     {activeLayer === "stress" && (
                       <>
                         <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="text-amber-300 font-bold">Stress Zones ({selectedFarm.satellite.stressZones.length} Detected)</span>
+                        <span className="text-amber-300 font-bold">Stress Zones ({displaySatellite.stressZones.length} Detected)</span>
                       </>
                     )}
                   </div>
                 </div>
               </div>
 
+              {/* ── Live Sentinel-2 Status Banner (real farms only) ── */}
+              {isRealFarm && (
+                <div
+                  className={`rounded-2xl border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    observation
+                      ? "bg-emerald-50 border-emerald-200"
+                      : "bg-amber-50 border-amber-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 text-xs">
+                    {satelliteLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 text-farm-muted animate-spin" />
+                        <span className="text-farm-muted font-medium">Checking for a live Sentinel-2 analysis…</span>
+                      </>
+                    ) : observation ? (
+                      <>
+                        <BadgeCheck className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                        <span className="text-emerald-900">
+                          <strong>Live Sentinel-2 data</strong> · {observation.satellite} · imaged{" "}
+                          {observation.provenance.as_of} · {observation.cloud_pct.toFixed(0)}% cloud
+                          {observation.is_fallback && " (best available — no clear scene this window)"}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-amber-700 flex-shrink-0" />
+                        <span className="text-amber-900">
+                          No live analysis yet for this farm — showing demo values until one runs.
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={refreshSatellite}
+                    disabled={isRefreshing}
+                    className="self-start sm:self-auto px-3 py-1.5 bg-white border border-farm-border-color hover:border-farm-green text-xs font-semibold rounded-lg text-farm-dark hover:text-farm-green transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed flex-shrink-0"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                    {isRefreshing ? "Running analysis…" : observation ? "Refresh from Sentinel-2" : "Run Sentinel-2 Analysis"}
+                  </button>
+                </div>
+              )}
+              {refreshError && (
+                <p className="text-xs text-red-600 -mt-3">{refreshError}</p>
+              )}
+
               {/* ── Comprehensive Satellite Analytics Panel ── */}
               <SatelliteAnalyticsPanel
                 farmName={selectedFarm.name}
                 crop={selectedFarm.crop}
                 areaAcres={selectedFarm.areaAcres}
-                satellite={selectedFarm.satellite}
+                satellite={displaySatellite}
                 activeLayer={activeLayer}
                 onLayerChange={setActiveLayer}
+                isLive={!!observation}
               />
             </>
           ) : (
