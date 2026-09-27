@@ -183,6 +183,27 @@ class TestCountRecentSentinel2Images:
         with pytest.raises(eec.EarthEngineTimeoutError):
             await client.count_recent_sentinel2_images()
 
+    async def test_wraps_an_ee_exception_as_earth_engine_request_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import ee as real_ee
+
+        fake_size = MagicMock()
+        fake_size.getInfo.side_effect = real_ee.EEException("User memory limit exceeded.")
+        fake_collection = MagicMock()
+        fake_collection.filterBounds.return_value = fake_collection
+        fake_collection.filterDate.return_value = fake_collection
+        fake_collection.size.return_value = fake_size
+        fake_ee = MagicMock()
+        fake_ee.ImageCollection.return_value = fake_collection
+        fake_ee.EEException = real_ee.EEException
+        monkeypatch.setattr(eec, "ee", fake_ee)
+
+        client = _configured_client()
+
+        with pytest.raises(eec.EarthEngineRequestError, match="User memory limit exceeded"):
+            await client.count_recent_sentinel2_images()
+
 
 class TestSelectBestImage:
     """Pure Python selection logic -- no Earth Engine involved, so these run

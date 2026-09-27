@@ -1,3 +1,5 @@
+import asyncio
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from app.core.satellite_health import compute_health_score, crop_stage_benchmark_ndvi, days_since
@@ -5,6 +7,7 @@ from app.integrations.earth_engine_client import (
     MAP_LAYERS_CACHE_HOURS,
     EarthEngineClient,
     EarthEngineNotConfiguredError,
+    EarthEngineRequestError,
     EarthEngineTimeoutError,
     NoSentinelImageryAvailableError,
 )
@@ -22,6 +25,15 @@ from app.repositories.index_timeseries_repository import IndexTimeseriesReposito
 from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.stress_zone_repository import StressZoneRepository
+
+# One asyncio.Lock per farm id -- see refresh_analysis.
+_refresh_locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+def _as_utc(value: datetime) -> datetime:
+    # SQLite (the test suite) drops tzinfo on read; the stored value is UTC.
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
 
 # Timeseries points with field cloud cover at/above this are dropped before
 # being stored -- too cloudy to trust for a trend line or alert.
@@ -75,12 +87,29 @@ class SatelliteService:
 
     async def refresh_analysis(self, farm: Farm) -> SatelliteObservation:
         """Runs a live Sentinel-2 analysis for `farm`'s polygon and stores
-        the result as a new cached observation."""
+        the result as a new cached observation.
+
+        At most one analysis per farm runs at a time: creating a farm starts
+        a background refresh, and the UI starts its own first analysis
+        moments later. A caller that arrives while one is running waits for
+        it and returns that result instead of paying for a duplicate ~30 s
+        Earth Engine run. (Per process -- enough for the single-worker
+        deployment this runs as today.)"""
+        requested_at = datetime.now(timezone.utc)
+        lock = _refresh_locks.setdefault(farm.id, asyncio.Lock())
+        async with lock:
+            latest = await self.get_latest(farm)
+            if latest is not None and _as_utc(latest.created_at) >= requested_at:
+                return latest  # finished by the caller we just waited for
+            return await self._run_analysis(farm)
+
+    async def _run_analysis(self, farm: Farm) -> SatelliteObservation:
         try:
             result = await self.earth_engine_client.analyze_field(farm.polygon_geojson)
         except (
             EarthEngineNotConfiguredError,
             EarthEngineTimeoutError,
+            EarthEngineRequestError,
             NoSentinelImageryAvailableError,
         ) as exc:
             raise SatelliteAnalysisError(str(exc)) from exc
@@ -146,7 +175,7 @@ class SatelliteService:
             raw_points = await self.earth_engine_client.build_field_timeseries(
                 farm.polygon_geojson, start=start, end=today
             )
-        except (EarthEngineNotConfiguredError, EarthEngineTimeoutError) as exc:
+        except (EarthEngineNotConfiguredError, EarthEngineTimeoutError, EarthEngineRequestError) as exc:
             raise SatelliteAnalysisError(str(exc)) from exc
 
         clear_points = [p for p in raw_points if p.cloud_pct < TIMESERIES_CLOUD_THRESHOLD]
@@ -277,6 +306,7 @@ class SatelliteService:
         except (
             EarthEngineNotConfiguredError,
             EarthEngineTimeoutError,
+            EarthEngineRequestError,
             NoSentinelImageryAvailableError,
         ) as exc:
             raise SatelliteAnalysisError(str(exc)) from exc
@@ -318,7 +348,7 @@ class SatelliteService:
             dynamics = await self.earth_engine_client.get_environment_dynamics(
                 farm.polygon_geojson, farm.sowing_date
             )
-        except (EarthEngineNotConfiguredError, EarthEngineTimeoutError) as exc:
+        except (EarthEngineNotConfiguredError, EarthEngineTimeoutError, EarthEngineRequestError) as exc:
             raise SatelliteAnalysisError(str(exc)) from exc
 
         existing = await self.environment_snapshot_repository.get_by_farm(farm.id)
@@ -326,7 +356,7 @@ class SatelliteService:
         if existing is None or existing.soil_fetched_at is None:
             try:
                 soil = await self.earth_engine_client.get_soil_properties(farm.polygon_geojson)
-            except (EarthEngineNotConfiguredError, EarthEngineTimeoutError) as exc:
+            except (EarthEngineNotConfiguredError, EarthEngineTimeoutError, EarthEngineRequestError) as exc:
                 raise SatelliteAnalysisError(str(exc)) from exc
 
         now = datetime.now(timezone.utc)

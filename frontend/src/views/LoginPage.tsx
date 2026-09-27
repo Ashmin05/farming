@@ -9,7 +9,7 @@
 // multi-language greeting switcher.
 // ==============================================================================
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -32,6 +32,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set when authorizedFetch ended an expired session (/login?expired=1).
+  // Read in an effect rather than via useSearchParams so this page doesn't
+  // need a Suspense boundary.
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  useEffect(() => {
+    setSessionExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -111,6 +119,13 @@ export default function LoginPage() {
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {sessionExpired && !error && (
+              <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Your session has expired. Please sign in again.</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-farm-dark mb-1.5" htmlFor="email">
                 Email

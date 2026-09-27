@@ -22,7 +22,7 @@ export function useFarmSatelliteTimeseries(farmId: string | undefined) {
   return {
     points: isRealFarm ? query.data ?? [] : [],
     isLoading: isRealFarm && query.isLoading,
-    isError: query.isError,
+    isError: isRealFarm && query.isError,
     retry: query.refetch,
   };
 }

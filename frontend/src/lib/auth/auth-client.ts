@@ -137,10 +137,14 @@ export async function loginWithGoogle(idToken: string): Promise<AuthTokens> {
   return tokens;
 }
 
-export async function refreshAccessToken(): Promise<AuthTokens | null> {
-  if (typeof window === "undefined") return null;
+type RefreshOutcome = AuthTokens | "expired" | "unreachable";
+
+// Only an actual rejection from /auth/refresh ends the session; a network
+// failure (backend briefly down) must not sign the user out.
+async function tryRefresh(): Promise<RefreshOutcome> {
+  if (typeof window === "undefined") return "unreachable";
   const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-  if (!refreshToken) return null;
+  if (!refreshToken) return "expired";
 
   try {
     const tokens = await authFetch<AuthTokens>("/auth/refresh", {
@@ -148,20 +152,83 @@ export async function refreshAccessToken(): Promise<AuthTokens | null> {
     });
     storeTokens(tokens);
     return tokens;
-  } catch {
-    clearTokens();
-    return null;
+  } catch (err) {
+    if (err instanceof AuthError) {
+      clearTokens();
+      return "expired";
+    }
+    return "unreachable";
   }
 }
 
-export async function getCurrentUser(): Promise<AuthUser | null> {
+// Several queries usually 401 at the same moment when the access token
+// expires -- they all share one refresh call instead of racing each other.
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+function refreshOnce(): Promise<RefreshOutcome> {
+  if (!refreshInFlight) {
+    refreshInFlight = tryRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+export async function refreshAccessToken(): Promise<AuthTokens | null> {
+  const outcome = await refreshOnce();
+  return typeof outcome === "string" ? null : outcome;
+}
+
+export class SessionExpiredError extends Error {}
+
+function endExpiredSession(): void {
+  clearTokens();
+  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    window.location.assign("/login?expired=1");
+  }
+}
+
+/**
+ * `fetch` with the stored access token for every authenticated backend
+ * call. Access tokens live 30 minutes: on a 401 this refreshes once via the
+ * refresh token and retries. If the refresh token is rejected too, the
+ * session is over -- tokens are cleared and the user is sent to
+ * /login?expired=1 (a SessionExpiredError is thrown meanwhile).
+ */
+export async function authorizedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const send = async (token: string) => {
+    try {
+      return await fetch(url, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // fetch only rejects when no response arrived at all; the browser's own
+      // wording ("Failed to fetch") means nothing to a farmer.
+      throw new Error("Can't reach the FasalSetu server. Check your connection and try again.");
+    }
+  };
+
   const accessToken = getAccessToken();
-  if (!accessToken) return null;
+  if (!accessToken) throw new SessionExpiredError("Not signed in.");
+
+  const res = await send(accessToken);
+  if (res.status !== 401) return res;
+
+  const outcome = await refreshOnce();
+  if (outcome === "expired") {
+    endExpiredSession();
+    throw new SessionExpiredError("Your session has expired. Please sign in again.");
+  }
+  if (outcome === "unreachable") return res; // let the caller surface the original 401
+  return send(outcome.access_token);
+}
+
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  if (!getAccessToken()) return null;
 
   try {
-    const res = await fetch(`${API_ROOT}/auth/me`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    const res = await authorizedFetch(`${API_ROOT}/auth/me`);
     if (!res.ok) return null;
     return (await res.json()) as AuthUser;
   } catch {
@@ -176,15 +243,11 @@ export function logout(): void {
 }
 
 export async function updateProfile(update: ProfileUpdate): Promise<AuthUser> {
-  const accessToken = getAccessToken();
-  if (!accessToken) throw new AuthError("Not signed in.");
+  if (!getAccessToken()) throw new AuthError("Not signed in.");
 
-  const res = await fetch(`${API_ROOT}/auth/profile`, {
+  const res = await authorizedFetch(`${API_ROOT}/auth/profile`, {
     method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
   });
 

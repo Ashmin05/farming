@@ -25,6 +25,7 @@ import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
 import SourceBadge, { LiveSource } from "@/components/SourceBadge";
 import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
 import AlertsStrip from "@/components/dashboard/AlertsStrip";
+import FarmsLoadError from "@/components/FarmsLoadError";
 import {
   Satellite, Droplets, TrendingUp, AlertTriangle,
   ShieldCheck, Thermometer, CheckCircle2,
@@ -40,7 +41,7 @@ function useGreeting(): string {
 }
 
 export default function DashboardPage() {
-  const { farms, mounted } = useFarmStore();
+  const { farms, mounted, loadError, retryLoad } = useFarmStore();
   const { profile } = useUserStore();
   const [selectedFarmId, setSelectedFarmId] = useState<string>(farms[0]?.id || "farm-1");
   const greeting = useGreeting();
@@ -72,6 +73,14 @@ export default function DashboardPage() {
   // flash it (keep the sidebar so the layout doesn't jump).
   if (!mounted) {
     return <AppLayout>{null}</AppLayout>;
+  }
+
+  if (loadError) {
+    return (
+      <AppLayout>
+        <FarmsLoadError message={loadError} onRetry={() => retryLoad()} />
+      </AppLayout>
+    );
   }
 
   if (!currentFarm) {

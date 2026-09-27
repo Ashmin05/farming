@@ -29,7 +29,7 @@ future geospatial work on field boundaries).
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
 `satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`,
-`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`) were used during buildout
+`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`) were used during buildout
 and have all been merged into `main`, which is
 what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
@@ -73,6 +73,11 @@ what's pushed to origin and described by this document. Notable merged work, rou
   season-curve chart, a pass-date slider that swaps the map layers, a `SourceBadge` on every
   satellite number, loading/empty/error states, and a Dashboard alerts strip with mark-as-read
   (§5.12). Found and fixed two real backend bugs that only live testing surfaced (§5.12).
+- `bug-fixes` — a review pass over §5.12 and the paths it touches: automatic token refresh
+  (users were effectively logged out after 30 minutes), load-error states instead of a
+  misleading "No farms yet", nightly jobs that no longer skip every later farm after one DB
+  error, Earth Engine errors as clean 503s, real error states for failed layers/timeseries, and
+  no more duplicate first analyses (§5.13).
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -276,7 +281,7 @@ backend/
 │   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 126 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 132 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -721,6 +726,50 @@ cards, mark-as-read (PATCH 200, strip updated immediately) and the guest demo vi
 calls were all checked. A temporary second farm exercised the real error → Retry → "Analysing…" →
 ready flow on a genuine 0% cloud S2C pass (which is how bug 2 was found), and was then deleted.
 
+### 5.13 Bug-fix pass (`bug-fixes`)
+
+A review of §5.12 and the paths it touches turned up the following, all fixed:
+
+1. **Signed-in users saw "No farms yet" 30 minutes after signing in.** Access tokens expire
+   after 30 min, but nothing ever called `refreshAccessToken()`, so every API call 401'd and
+   `farmStore` read the failed load as an empty account. Now every authenticated call goes
+   through **`authorizedFetch()`** (`src/lib/auth/auth-client.ts`). On a 401 it refreshes once
+   via `/auth/refresh` (concurrent 401s share one refresh call) and retries. If the refresh token
+   is rejected too, it clears the tokens and redirects to **`/login?expired=1`**, which shows
+   "Your session has expired". A network failure during refresh no longer signs the user out
+   (previously *any* refresh failure cleared the tokens). "Failed to fetch" is replaced by a
+   readable "Can't reach the FasalSetu server" message.
+2. **A failed farm-list load looked like an empty account.** `farmStore` now exposes
+   `loadError`/`retryLoad`, and the Dashboard, Satellite and Farms pages show **"Couldn't load
+   your farms" + Try again** (`components/FarmsLoadError.tsx`). Readiness now waits for the query
+   to actually succeed or fail: TanStack Query pauses retries in a background tab, and the old
+   `!isLoading` check treated that paused state as "loaded, no farms".
+3. **One farm's DB error made the nightly jobs skip every farm after it.** Both jobs share one
+   session; a failed commit left it unusable (`PendingRollbackError` for every later farm). Each
+   per-farm failure now calls `session.rollback()`, and the loop re-reads each farm by id (a
+   rollback expires loaded ORM objects, which can't lazy-load in async). Covered by
+   `tests/test_scheduler.py`, which fails without the fix.
+4. **Unexpected Earth Engine errors escaped as bare 500s.** Any `ee.EEException` from a network
+   call (quota, server-side computation errors) is now raised as `EarthEngineRequestError` by
+   `_get_info`/`_get_map_id` and turned into `SatelliteAnalysisError` → a 503 with the real
+   message, like the other Earth Engine failures.
+5. **A failed `/layers` request showed "0 Zones Detected — no anomalies".** `getSatelliteLayers`
+   no longer turns a 503 into `null`. The map shows "Couldn't load imagery for this pass · Retry",
+   and the stress-zone list shows an error with Retry.
+6. **A failed `/timeseries` request showed the "builds up nightly" empty message**; it now shows an
+   error with Retry.
+7. **A new farm could get two concurrent ~30 s Earth Engine analyses** (the post-create background
+   refresh plus the UI's first analysis). `SatelliteService.refresh_analysis()` now holds a
+   per-farm `asyncio.Lock`. A caller arriving mid-run waits and returns that run's result.
+   Per-process only, which is enough for today's single-worker deployment.
+
+Live-verified in the browser: an invalid access token plus a valid refresh token produced
+`401 → /auth/refresh 200 → retry 200`, with the farm shown normally. Both tokens invalid
+redirected to `/login?expired=1` with the notice. With the backend down, the Dashboard and Satellite
+page showed the load error, and Try again recovered once the backend was back. Racing a refresh
+against a new farm's background analysis stored exactly one analysis (the temp farm was then
+deleted).
+
 ---
 
 ## 6. Authentication system (the main feature built so far)
@@ -734,7 +783,10 @@ ready flow on a genuine 0% cloud S2C pass (which is how bug 2 was found), and wa
    `is_active`, and if all good issues a signed JWT **access token** (short-lived, 30 min default)
    and **refresh token** (long-lived, 7 days default).
 3. **Refresh** (`POST /auth/refresh`): verifies the refresh token's signature/expiry/type, looks
-   up the user, and issues a new access token (refresh token itself doesn't rotate).
+   up the user, and issues a new access token (refresh token itself doesn't rotate). The
+   frontend calls this automatically: every authenticated request goes through
+   `authorizedFetch()`, which refreshes once on a 401 and retries, or ends the session with a
+   redirect to `/login?expired=1` if the refresh token is rejected too (§5.13).
 4. **`/auth/me`**: `get_current_user()` dependency decodes the Bearer access token, verifies it's
    an `access`-type token (not a refresh token used where it shouldn't be), loads the user, and
    401s with `Could not validate credentials` if anything is wrong.
@@ -955,7 +1007,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 126 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 132 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
 **Nightly jobs (§5.9, §5.11)**: both start automatically with the backend (registered in `main.py`'s
@@ -1020,9 +1072,8 @@ npm run dev    # http://localhost:3000
 - **Give the "no imagery" case its own status code** — the frontend detects it by the 503 message
   prefix "No Sentinel-2 imagery" (§5.12), which works but is brittle; a distinct code (or an
   `error_code` field) would be cleaner.
-- **The Satellite page and Dashboard go blank when the backend is unreachable** — the farm list
-  itself (`farmStore`) never finishes loading, so the new satellite error states (§5.12) are never
-  reached in that case. A farm-list error state would fix it.
+- **Move the refresh-analysis dedupe lock (§5.13) to the database or Redis before running more than
+  one backend worker.** Today it's a per-process `asyncio.Lock`.
 - **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked
   for, but Earth Engine flags it deprecated and it stopped updating around mid-2025; the response
   already surfaces this honestly via `as_of` rather than hiding it, but the underlying collection

@@ -3,7 +3,7 @@
  * Used only for signed-in accounts — guests keep the local demo dataset in
  * farmStore.ts. See auth-client.ts for the token storage this reads from.
  */
-import { getAccessToken } from "@/lib/auth/auth-client";
+import { authorizedFetch, getAccessToken } from "@/lib/auth/auth-client";
 
 const API_ROOT = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1").replace(
   /\/api\/v1\/?$/,
@@ -56,15 +56,13 @@ function extractErrorMessage(payload: unknown, status: number): string {
 }
 
 async function farmsFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const accessToken = getAccessToken();
-  if (!accessToken) throw new FarmApiError("Not signed in.");
+  if (!getAccessToken()) throw new FarmApiError("Not signed in.");
 
-  const res = await fetch(`${API_ROOT}/farms${path}`, {
+  const res = await authorizedFetch(`${API_ROOT}/farms${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      ...init?.headers,
+      ...(init?.headers as Record<string, string> | undefined),
     },
   });
 
