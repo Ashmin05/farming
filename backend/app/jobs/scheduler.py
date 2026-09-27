@@ -5,8 +5,10 @@
    NDVI/NDWI/EVI timeseries + alerts.
 2. For every farm, refresh its environment report (rainfall/temperature/
    soil moisture; soil properties only on a farm's first-ever refresh).
-3. Pull the day's mandi prices from Agmarknet via data.gov.in into
-   mandi_prices (also runnable by hand: scripts/sync_mandi_prices.py).
+3. Mandi prices (app/jobs/market_prices.py): nightly re-fetch of recent
+   prices for every watched state x commodity, weekly catalogue refresh
+   (also runnable by hand: scripts/ingest_market_prices.py,
+   scripts/sync_market_catalog.py).
 
 Started once at FastAPI startup (see app/main.py's lifespan).
 """
@@ -17,22 +19,21 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.database import AsyncSessionLocal
-from app.integrations.agmarknet_client import agmarknet_client
+from app.jobs.market_prices import run_current_price_ingestion, run_market_catalog_sync
 from app.integrations.earth_engine_client import earth_engine_client
 from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
-from app.repositories.mandi_price_repository import MandiPriceRepository
 from app.repositories.satellite_repository import SatelliteRepository
-from app.services.price_service import PriceService
 from app.services.satellite_service import SatelliteAnalysisError, SatelliteService
 
 logger = logging.getLogger(__name__)
 
 TIMESERIES_JOB_ID = "nightly_satellite_timeseries_refresh"
 ENVIRONMENT_JOB_ID = "nightly_environment_refresh"
-MANDI_PRICES_JOB_ID = "nightly_mandi_price_sync"
+MARKET_PRICES_JOB_ID = "nightly_market_price_ingestion"
+MARKET_CATALOG_JOB_ID = "weekly_market_catalog_sync"
 
 scheduler = AsyncIOScheduler()
 
@@ -126,16 +127,6 @@ async def run_nightly_environment_refresh() -> None:
         )
 
 
-async def run_nightly_mandi_price_sync() -> None:
-    """Syncs the day's mandi prices. Skips quietly without an API key; a
-    failed sync is recorded (responses then serve the last stored day with
-    is_live=false) rather than raised -- see PriceService.sync_prices."""
-    async with AsyncSessionLocal() as session:
-        sync = await PriceService(MandiPriceRepository(session), agmarknet_client).sync_prices()
-        if sync is not None and not sync.succeeded:
-            logger.warning("Nightly mandi price sync failed: %s", sync.error)
-
-
 def start_scheduler() -> None:
     """Call once at app startup. Safe to call more than once -- a job with
     the same id replaces the previous registration instead of duplicating."""
@@ -152,15 +143,23 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     scheduler.add_job(
-        run_nightly_mandi_price_sync,
+        run_current_price_ingestion,
         # 23:00 server time -- after most mandis have reported the day's arrivals
         trigger=CronTrigger(hour=23, minute=0),
-        id=MANDI_PRICES_JOB_ID,
+        id=MARKET_PRICES_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_market_catalog_sync,
+        trigger=CronTrigger(day_of_week="sun", hour=22, minute=0),  # before that night's price run
+        id=MARKET_CATALOG_JOB_ID,
         replace_existing=True,
     )
     if not scheduler.running:
         scheduler.start()
-        logger.info("Scheduler started (timeseries 02:00, environment 02:30, mandi prices 23:00).")
+        logger.info(
+            "Scheduler started (timeseries 02:00, environment 02:30, mandi prices 23:00, market catalogue Sun 22:00)."
+        )
 
 
 def stop_scheduler() -> None:

@@ -43,7 +43,7 @@ from app.integrations.market_prices.http import (
     USER_AGENT,
     request_json,
 )
-from app.integrations.market_prices.text import clean_text, name_key, parse_date, parse_decimal
+from app.integrations.market_prices.text import clean_text, commodity_keys, name_key, parse_date, parse_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,6 @@ BASE_URL = "https://api.ceda.ashoka.edu.in/v1"
 ARCHIVE_END = date(2025, 10, 30)
 # Keep each price request to a year so responses stay a sensible size.
 MAX_SPAN = timedelta(days=366)
-
-# The same commodity spelt differently by CEDA and Agmarknet 2.0, keyed by
-# name_key(). Only genuinely identical commodities belong here.
-COMMODITY_ALIASES = {
-    "paddy common": "paddy dhan common",
-    "paddy dhan common": "paddy common",
-}
 
 
 def _retryable(exc: BaseException) -> bool:
@@ -254,7 +247,7 @@ def resolve_state(catalog: ProviderCatalog, state: str) -> CatalogState:
 
 
 def resolve_commodity(catalog: ProviderCatalog, commodity: str) -> CatalogCommodity:
-    wanted = {name_key(commodity), COMMODITY_ALIASES.get(name_key(commodity), "")} - {""}
+    wanted = commodity_keys(commodity)
     for c in catalog.commodities:
         if name_key(c.name) in wanted:
             return c

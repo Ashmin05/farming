@@ -19,6 +19,14 @@ _MARKET_SUFFIXES = ("apmc", "mandi", "market", "regulated market", "vfpck market
 
 TWO_PLACES = Decimal("0.01")
 
+# The same commodity spelt differently across sources (CEDA and data.gov.in
+# keep the old portal's "Paddy(Dhan)(...)" names), keyed by name_key(). Only
+# genuinely identical commodities belong here.
+COMMODITY_ALIASES = {
+    "paddy dhan common": "paddy common",
+    "paddy dhan basmati": "paddy basmati",
+}
+
 DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -83,3 +91,13 @@ def parse_date(value, issues: list[str]) -> date | None:
             continue
     issues.append(f"arrival_date unparseable: {value!r}")
     return None
+
+
+def commodity_keys(value: str | None) -> set[str]:
+    """Every name_key a commodity name may appear under, across sources."""
+    key = name_key(value)
+    keys = {key}
+    for a, b in COMMODITY_ALIASES.items():
+        if key in (a, b):
+            keys |= {a, b}
+    return keys - {""}

@@ -284,19 +284,36 @@ def parse_datewise(
     price_unit = PRICE_UNIT if (price_title or "").lower() == EXPECTED_PRICE_UNIT_TITLE else (price_title or "unknown")
     arrival_unit = ARRIVAL_UNIT if (arrival_title or "").lower() == EXPECTED_ARRIVAL_UNIT_TITLE else arrival_title
 
-    markets_by_key = {market_key(m.name): m for m in catalog.markets if m.state_external_id == state.external_id}
+    markets_by_key: dict[str, list[CatalogMarket]] = {}
+    for m in catalog.markets:
+        if m.state_external_id == state.external_id:
+            markets_by_key.setdefault(market_key(m.name), []).append(m)
     districts = {d.external_id: d for d in catalog.districts}
 
     records: list[NormalizedMarketPrice] = []
     for market_block in body.get("markets") or []:
         market_name = clean_text(market_block.get("marketName"))
-        market = markets_by_key.get(market_key(market_name))
+        candidates = markets_by_key.get(market_key(market_name), [])
+        # The report names markets without ids; a name shared by several
+        # markets in the state can't be attributed, so it stays unresolved.
+        market = candidates[0] if len(candidates) == 1 else None
         district = districts.get(market.district_external_id) if market and market.district_external_id else None
         for day in market_block.get("dates") or []:
+            # One market/day can list the same variety more than once --
+            # separate lots (the rows' arrivals add up to the day's
+            # total_arrivals) that the report doesn't label further. Each
+            # keeps its own record, numbered in report order.
+            lot_numbers: dict[str, int] = {}
             for row in day.get("data") or []:
                 issues: list[str] = []
-                if market is None:
+                lot_key = name_key(clean_text(row.get("variety"))) or "-"
+                lot_numbers[lot_key] = lot_numbers.get(lot_key, 0) + 1
+                if not candidates:
                     issues.append(f"market {market_name!r} not in the Agmarknet catalogue for {state.name}")
+                elif market is None:
+                    issues.append(
+                        f"market {market_name!r} is ambiguous: {len(candidates)} catalogue markets in {state.name} share the name"
+                    )
                 arrival_date = parse_date(day.get("arrivalDate"), issues)
                 variety = clean_text(row.get("variety"))
                 arrivals = row.get("arrivals")
@@ -310,6 +327,7 @@ def parse_datewise(
                             market.external_id if market else market_key(market_name),
                             name_key(variety) or "-",
                             arrival_date.isoformat() if arrival_date else str(day.get("arrivalDate")),
+                            str(lot_numbers[lot_key]),
                         ]
                     ),
                     state=state.name,
