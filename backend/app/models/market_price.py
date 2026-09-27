@@ -299,3 +299,59 @@ class MarketPriceStats(Base):
     trend: Mapped[str] = mapped_column(String(20), nullable=False)  # increasing|stable|decreasing|insufficient_data
     trend_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class PriceForecastModel(Base):
+    """A trained forecaster for one commodity x state x horizon: what was
+    chosen, on what data, and how it validated. The artifact itself lives on
+    disk (PRICE_MODEL_DIR); only the active version per slot is used."""
+
+    __tablename__ = "price_forecast_models"
+    __table_args__ = (Index("ix_price_forecast_models_slot", "commodity_id", "state_id", "horizon_days", "is_active"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    commodity_id: Mapped[int] = mapped_column(ForeignKey("commodities.id", ondelete="CASCADE"), nullable=False)
+    state_id: Mapped[int] = mapped_column(ForeignKey("states.id", ondelete="CASCADE"), nullable=False)
+    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    train_start: Mapped[date] = mapped_column(Date, nullable=False)
+    train_end: Mapped[date] = mapped_column(Date, nullable=False)
+    n_samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_markets: Mapped[int] = mapped_column(Integer, nullable=False)
+    features: Mapped[list] = mapped_column(JsonVariant, nullable=False, default=list)
+    # Validation of the chosen model (Rs/quintal) + every candidate's.
+    mae: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rmse: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mape: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evaluation: Mapped[dict] = mapped_column(JsonVariant, nullable=False, default=dict)
+    interval_low_log: Mapped[float | None] = mapped_column(Float, nullable=True)
+    interval_high_log: Mapped[float | None] = mapped_column(Float, nullable=True)
+    artifact_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class PriceForecast(Base):
+    """A stored estimate -- never a guaranteed price."""
+
+    __tablename__ = "price_forecasts"
+    __table_args__ = (
+        UniqueConstraint("market_id", "commodity_id", "base_date", "horizon_days", "model_id", name="uq_price_forecast"),
+        Index("ix_price_forecasts_lookup", "market_id", "commodity_id", "generated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True)
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)
+    commodity_id: Mapped[int] = mapped_column(ForeignKey("commodities.id", ondelete="CASCADE"), nullable=False)
+    model_id: Mapped[int] = mapped_column(ForeignKey("price_forecast_models.id", ondelete="CASCADE"), nullable=False)
+    base_date: Mapped[date] = mapped_column(Date, nullable=False)  # the latest actual price used
+    base_price: Mapped[Decimal] = mapped_column(Price, nullable=False)
+    forecast_date: Mapped[date] = mapped_column(Date, nullable=False)  # base_date + horizon
+    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    predicted_price: Mapped[Decimal] = mapped_column(Price, nullable=False)
+    lower_bound: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    upper_bound: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    model_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)

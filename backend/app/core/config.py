@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     MARKET_PRICE_INCLUDE_FARM_CROPS: bool = True
     # Days re-fetched each night (late and revised reports get picked up).
     MARKET_PRICE_CURRENT_DAYS: int = 10
+    # Where trained price-forecast models are written (gitignored). Relative
+    # paths are resolved against backend/.
+    PRICE_MODEL_DIR: str = "models_store"
+
+    @property
+    def price_model_dir(self) -> Path:
+        path = Path(self.PRICE_MODEL_DIR)
+        return path if path.is_absolute() else ROOT_DIR / "backend" / path
 
     @property
     def market_price_provider_order(self) -> list[str]:

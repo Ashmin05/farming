@@ -6,11 +6,15 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from sqlalchemy import select
+
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.integrations.market_prices.agmarknet import AgmarknetProvider
 from app.integrations.market_prices.registry import configured_providers
-from app.models.market_price import PriceIngestionRun
+from app.integrations.market_prices.text import commodity_keys, name_key
+from app.ml.price_forecast.service import generate_forecasts, train_models
+from app.models.market_price import Commodity, MarketPriceDaily, MarketState, PriceIngestionRun
 from app.services.market_prices.analytics import refresh_analytics
 from app.services.market_prices.ingestion import MarketPriceIngestionService
 from app.services.market_prices.watchlist import current_queries, watchlist
@@ -77,3 +81,50 @@ async def run_current_price_ingestion(
     if run.status != "succeeded":
         logger.warning("Market price ingestion %s: %s", run.status, run.error)
     return run
+
+
+async def watched_slots(session) -> list[tuple[int, int]]:
+    """(commodity_id, state_id) for every watched pair that has daily data."""
+    pairs = await watchlist(session, include_farms=settings.MARKET_PRICE_INCLUDE_FARM_CROPS)
+    have = set((await session.execute(select(MarketPriceDaily.commodity_id, MarketPriceDaily.state_id).distinct())).all())
+    states = {s.name_key: s.id for s in (await session.scalars(select(MarketState))).all()}
+    commodities: dict[str, list[int]] = {}
+    for c in (await session.scalars(select(Commodity))).all():
+        commodities.setdefault(c.name_key, []).append(c.id)
+    slots: list[tuple[int, int]] = []
+    for state, commodity in pairs:
+        state_id = states.get(name_key(state))
+        for key in commodity_keys(commodity):
+            for commodity_id in commodities.get(key, []):
+                slot = (commodity_id, state_id)
+                if state_id and slot in have and slot not in slots:
+                    slots.append(slot)
+    return slots
+
+
+async def run_price_model_training(session_factory=None) -> int:
+    """Weekly: retrain forecasters for every watched commodity x state."""
+    trained = 0
+    async with (session_factory or AsyncSessionLocal)() as session:
+        for commodity_id, state_id in await watched_slots(session):
+            try:
+                trained += len(await train_models(session, commodity_id, state_id))
+            except Exception:  # noqa: BLE001 -- one bad slot must not stop the rest
+                await session.rollback()
+                logger.exception("Training failed for commodity %s state %s", commodity_id, state_id)
+    logger.info("Price model training finished: %d model(s) registered", trained)
+    return trained
+
+
+async def run_price_forecasts(session_factory=None) -> int:
+    """Nightly, after ingestion: refresh 7/14/30-day estimates."""
+    written = 0
+    async with (session_factory or AsyncSessionLocal)() as session:
+        for commodity_id, state_id in await watched_slots(session):
+            try:
+                written += await generate_forecasts(session, commodity_id, state_id)
+            except Exception:  # noqa: BLE001
+                await session.rollback()
+                logger.exception("Forecasting failed for commodity %s state %s", commodity_id, state_id)
+    logger.info("Price forecasts refreshed: %d estimate(s)", written)
+    return written

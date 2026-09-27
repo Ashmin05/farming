@@ -6,9 +6,10 @@
 2. For every farm, refresh its environment report (rainfall/temperature/
    soil moisture; soil properties only on a farm's first-ever refresh).
 3. Mandi prices (app/jobs/market_prices.py): nightly re-fetch of recent
-   prices for every watched state x commodity, weekly catalogue refresh
-   (also runnable by hand: scripts/ingest_market_prices.py,
-   scripts/sync_market_catalog.py).
+   prices for every watched state x commodity, then fresh 7/14/30-day
+   forecasts from the active models; weekly model retraining and catalogue
+   refresh (also runnable by hand: scripts/ingest_market_prices.py,
+   scripts/train_price_models.py, scripts/sync_market_catalog.py).
 
 Started once at FastAPI startup (see app/main.py's lifespan).
 """
@@ -19,7 +20,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.database import AsyncSessionLocal
-from app.jobs.market_prices import run_current_price_ingestion, run_market_catalog_sync
+from app.jobs.market_prices import (
+    run_current_price_ingestion,
+    run_market_catalog_sync,
+    run_price_forecasts,
+    run_price_model_training,
+)
 from app.integrations.earth_engine_client import earth_engine_client
 from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_alert_repository import FarmAlertRepository
@@ -34,6 +40,8 @@ TIMESERIES_JOB_ID = "nightly_satellite_timeseries_refresh"
 ENVIRONMENT_JOB_ID = "nightly_environment_refresh"
 MARKET_PRICES_JOB_ID = "nightly_market_price_ingestion"
 MARKET_CATALOG_JOB_ID = "weekly_market_catalog_sync"
+PRICE_FORECAST_JOB_ID = "nightly_price_forecasts"
+PRICE_TRAINING_JOB_ID = "weekly_price_model_training"
 
 scheduler = AsyncIOScheduler()
 
@@ -150,6 +158,18 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     scheduler.add_job(
+        run_price_forecasts,
+        trigger=CronTrigger(hour=23, minute=45),  # after the 23:00 price ingestion
+        id=PRICE_FORECAST_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_price_model_training,
+        trigger=CronTrigger(day_of_week="sat", hour=3, minute=0),  # weekly, off-peak (CPU-heavy)
+        id=PRICE_TRAINING_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
         run_market_catalog_sync,
         trigger=CronTrigger(day_of_week="sun", hour=22, minute=0),  # before that night's price run
         id=MARKET_CATALOG_JOB_ID,
@@ -158,7 +178,8 @@ def start_scheduler() -> None:
     if not scheduler.running:
         scheduler.start()
         logger.info(
-            "Scheduler started (timeseries 02:00, environment 02:30, mandi prices 23:00, market catalogue Sun 22:00)."
+            "Scheduler started (timeseries 02:00, environment 02:30, mandi prices 23:00, price forecasts 23:45, "
+            "forecast training Sat 03:00, market catalogue Sun 22:00)."
         )
 
 
