@@ -53,11 +53,21 @@ class Settings(BaseSettings):
     GEE_SERVICE_ACCOUNT_EMAIL: str | None = None
     GEE_KEY_PATH: str | None = None
 
+    # ---- Mandi prices (app/integrations/market_prices/) ----
+    # Agmarknet 2.0 is public and needs no key. The other two are optional:
+    # CEDA Agri Market API (https://api.ceda.ashoka.edu.in/documentation/) --
+    # archive of the old Agmarknet portal, used as a historical fallback.
+    CEDA_API_KEY: str | None = None
     # data.gov.in Open Government Data API key (free: sign up at
-    # https://data.gov.in, then "My Account" -> API key). Used by
-    # app/integrations/agmarknet_client.py for daily mandi prices. Missing ->
-    # the mandi price sync job skips, and the API serves whatever is stored.
+    # https://data.gov.in, then "My Account" -> API key). Current day only.
     DATA_GOV_IN_API_KEY: str | None = None
+    # Providers to try, in order, comma-separated. A provider without its key
+    # is skipped.
+    MARKET_PRICE_PROVIDERS: str = "agmarknet,ceda,data_gov_in"
+
+    @property
+    def market_price_provider_order(self) -> list[str]:
+        return [p.strip() for p in self.MARKET_PRICE_PROVIDERS.split(",") if p.strip()]
 
 
 @lru_cache
