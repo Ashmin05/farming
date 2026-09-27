@@ -41,6 +41,8 @@ async def client(session, monkeypatch):
         series("Bara Bazar (Posta Bazar) APMC", "Kolkata", 1400, 15)  # rising ~5%/week
         + series("Burdwan APMC", "Purba Bardhaman", 1900, -12)  # falling ~5%/week
         + series("Sheoraphuly APMC", "Hooghly", 1450, 0)  # flat
+        # Stopped reporting in July -> left out of nearby comparisons.
+        + [record(source_record_id="old", market="Alipurduar APMC", district="Alipurduar", arrival_date=date(2026, 7, 1))]
     )
     service = MarketPriceIngestionService(session, [FakeProvider(batches=[ProviderPriceBatch(records)])], today=TODAY)
     await service.ingest([QUERY], kind="current")
@@ -71,14 +73,14 @@ async def client(session, monkeypatch):
 
 async def test_catalogue_endpoints(client) -> None:
     commodities = (await client.get("/market-prices/commodities", params={"state": "West Bengal"})).json()
-    assert [(c["name"], c["markets"]) for c in commodities] == [("Potato", 3)]
+    assert [(c["name"], c["markets"]) for c in commodities] == [("Potato", 4)]
 
     locations = (await client.get("/market-prices/locations", params={"commodity": "potato"})).json()
     assert locations[0]["name"] == "West Bengal"
-    assert {d["name"] for d in locations[0]["districts"]} == {"Kolkata", "Purba Bardhaman", "Hooghly"}
+    assert {d["name"] for d in locations[0]["districts"]} == {"Kolkata", "Purba Bardhaman", "Hooghly", "Alipurduar"}
 
     markets = (await client.get("/market-prices/markets", params={"state": "West Bengal", "commodity": "Potato"})).json()
-    assert len(markets) == 3 and all(m["latest_date"] == "2026-09-25" for m in markets)
+    assert len(markets) == 4 and sum(m["latest_date"] == "2026-09-25" for m in markets) == 3
     assert (await client.get("/market-prices/markets")).status_code == 422
 
 
@@ -105,7 +107,8 @@ async def test_errors(client) -> None:
 
 async def test_raw_prices_paginate(client) -> None:
     body = (await client.get("/market-prices", params={"commodity": "Potato", "page_size": 10, "page": 2})).json()
-    # Default window: 30 days back from today (2026-08-28..09-27); data ends 09-25 -> 29 days x 3 markets.
+    # Default window: 30 days back from today (2026-08-28..09-27); data ends 09-25 -> 29 days x 3 markets
+    # (the fourth market's only report is from July).
     assert body["total"] == 3 * 29
     assert len(body["records"]) == 10 and body["records"][0]["unit"] == "Rs/quintal"
 
@@ -134,6 +137,7 @@ async def test_nearby(client) -> None:
 async def test_trends(client) -> None:
     body = (await client.get("/market-prices/trends", params={"commodity": "Potato", "state": "West Bengal"})).json()
     assert body["trend_counts"] == {"increasing": 1, "stable": 1, "decreasing": 1, "insufficient_data": 0}
+    assert body["markets_stale"] == 1
     assert body["top_gainers"][0]["market"] == "Bara Bazar (Posta Bazar) APMC"
     assert body["top_decliners"][0]["market"] == "Burdwan APMC"
 
@@ -205,4 +209,4 @@ async def test_farm_market_prices(client) -> None:
 
 async def test_quality_endpoint(client) -> None:
     body = (await client.get("/market-prices/quality")).json()
-    assert body["stored_records"] == 105 and body["recent_runs"][0]["kind"] == "current"
+    assert body["stored_records"] == 106 and body["recent_runs"][0]["kind"] == "current"

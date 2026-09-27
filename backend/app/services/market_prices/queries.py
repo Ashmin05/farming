@@ -36,6 +36,8 @@ SOURCE_LABELS = {
 }
 # Prices older than this (vs today) are flagged stale in responses.
 STALE_AFTER_DAYS = 7
+# Nearby comparison only lists markets that reported within this window.
+NEARBY_MAX_AGE_DAYS = 30
 OUTLOOK_THRESHOLD_PCT = 2.5
 FORECAST_DISCLAIMER = (
     "Forecasts are statistical estimates from historical mandi prices, seasonal patterns, recent trends and "
@@ -390,6 +392,7 @@ async def nearby(
     found = await nearby_markets(
         session, commodity_id=commodity.id, lat=lat, lon=lon, radius_km=radius_km,
         state_id=state.id if state else None, district_id=district.id if district else None, limit=limit,
+        reported_since=today_utc() - timedelta(days=NEARBY_MAX_AGE_DAYS),
     )
     state_names = dict((await session.execute(select(MarketState.id, MarketState.name))).all())
     return [
@@ -504,9 +507,10 @@ def outlook(commodity: Commodity, stats: dict | None, forecast_data: dict | None
             statements.append(f"The 7-day forecast estimates a fall of about {abs(c):.1f}% (estimate, not guaranteed).")
         else:
             statements.append("The 7-day forecast estimates prices to remain relatively stable (estimate, not guaranteed).")
-    if nearby_rows:
-        fresh = [r for r in nearby_rows if r["trend"] != "insufficient_data" or r["as_of"] == stats["as_of"]]
-        top = max(fresh or nearby_rows, key=lambda r: r["modal_price"])
+    # Compare only with markets that reported within a week of this one.
+    comparable = [r for r in (nearby_rows or []) if abs((r["as_of"] - stats["as_of"]).days) <= STALE_AFTER_DAYS]
+    if len(comparable) > 1:
+        top = max(comparable, key=lambda r: r["modal_price"])
         where = f" ({top['distance_km']:.0f} km away)" if top.get("distance_km") is not None else ""
         statements.append(
             f"Among nearby markets, {top['market']}{where} currently has the highest modal price "

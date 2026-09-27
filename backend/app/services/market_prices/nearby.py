@@ -13,7 +13,8 @@ nearby_markets() ranks what's stored, transparently:
     within the radius;
   * without: markets in the same district, then the rest of the state
     (distance None).
-The result is a comparison, not a recommendation of where to sell.
+Markets that haven't reported since `reported_since` are left out. The
+result is a comparison, not a recommendation of where to sell.
 """
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ async def nearby_markets(
     state_id: int | None = None,
     district_id: int | None = None,
     limit: int = 25,
+    reported_since: date | None = None,
 ) -> list[NearbyMarket]:
     query = (
         select(MarketPriceStats, Market, MarketDistrict.name)
@@ -73,6 +75,9 @@ async def nearby_markets(
         .outerjoin(MarketDistrict, MarketDistrict.id == Market.district_id)
         .where(MarketPriceStats.commodity_id == commodity_id)
     )
+    if reported_since is not None:
+        # A market that stopped reporting long ago isn't a useful comparison.
+        query = query.where(MarketPriceStats.as_of_date >= reported_since)
     rows = (await session.execute(query)).all()
 
     found: dict[int, NearbyMarket] = {}
