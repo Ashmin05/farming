@@ -22,6 +22,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
 import MapView from "@/components/map/MapView";
+import FarmsLoadError from "@/components/FarmsLoadError";
 import SourceBadge, { formatPassDate, LiveSource } from "@/components/SourceBadge";
 import { useFarmStore, applyLiveSatellite } from "@/lib/stores/farmStore";
 import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
@@ -78,7 +79,7 @@ function SatelliteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const farmParam = searchParams.get("farm");
-  const { farms, mounted } = useFarmStore();
+  const { farms, mounted, loadError, retryLoad } = useFarmStore();
 
   const [selectedId, setSelectedId] = useState<string>(farms[0]?.id || "farm-1");
   const [activeLayer, setActiveLayer] = useState<SatelliteMapLayer>("ndvi");
@@ -123,12 +124,21 @@ function SatelliteContent() {
   const mapDate = selectedPass ?? observation?.image_date;
   const mapPass = passes.find((p) => p.date === mapDate);
 
-  const { layers, isLoading: layersLoading } = useFarmSatelliteLayers(selectedFarm?.id, mapDate);
+  const {
+    layers,
+    isLoading: layersLoading,
+    error: layersError,
+    retry: retryLayers,
+  } = useFarmSatelliteLayers(selectedFarm?.id, mapDate);
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render nothing rather than flash it.
   if (!mounted) {
     return null;
+  }
+
+  if (loadError) {
+    return <FarmsLoadError message={loadError} onRetry={() => retryLoad()} />;
   }
 
   if (!selectedFarm) {
@@ -306,6 +316,18 @@ function SatelliteContent() {
             Loading satellite imagery…
           </div>
         )}
+        {layersError && !layersLoading && (
+          <div
+            role="alert"
+            className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-red-600/90 backdrop-blur-sm text-white px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg max-w-[90%]"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Couldn&apos;t load imagery for this pass</span>
+            <button onClick={() => retryLayers()} className="underline flex-shrink-0">
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* Location badge (top-left) */}
         <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-3.5 py-2 shadow-md flex items-center gap-2 max-w-[60%]">
@@ -450,6 +472,8 @@ function SatelliteContent() {
               emptyMessage: timeseries.isLoading
                 ? "Loading season curve…"
                 : "Your season curve builds up as the nightly job records each clear pass — the first points appear after tonight's run.",
+              error: timeseries.isError ? "Couldn't load your season curve." : null,
+              onRetry: () => timeseries.retry(),
               selectedKey: isRealFarm ? mapDate : undefined,
               onSelectPoint: isRealFarm
                 ? (point) => setSelectedPass(point.key === observation?.image_date ? null : point.key)
@@ -459,6 +483,8 @@ function SatelliteContent() {
               items: stressZoneItems,
               badge: isRealFarm ? mapSource && <SourceBadge live={mapSource} /> : <SourceBadge demo />,
               isLoading: isRealFarm && layersLoading,
+              error: layersError,
+              onRetry: () => retryLayers(),
             }}
           />
 

@@ -587,7 +587,20 @@ export function useFarmStore() {
   });
 
   const farms = isGuest ? guestFarms : farmsQuery.data ?? [];
-  const ready = mounted && (isGuest || !farmsQuery.isLoading);
+  // Ready only once the load has actually settled. Not `!isLoading`: while
+  // TanStack Query waits to retry (it pauses retries in a background tab)
+  // the query is neither loading nor errored, and `farms` would read as an
+  // empty account.
+  const ready = mounted && (isGuest || farmsQuery.isSuccess || farmsQuery.isError);
+  // A failed load must never read as "this account has no farms" -- pages
+  // show an error + retry instead of the empty "Register a farm" state.
+  const loadError =
+    !isGuest && farmsQuery.isError && !farmsQuery.data
+      ? farmsQuery.error instanceof Error
+        ? farmsQuery.error.message
+        : "Couldn't load your farms."
+      : null;
+  const retryLoad = farmsQuery.refetch;
 
   const addFarm = useCallback(
     async (draft: FarmDraft, clientAreaAcres: number): Promise<Farm> => {
@@ -639,7 +652,7 @@ export function useFarmStore() {
     saveFarms(DEFAULT_FARMS);
   }, [isGuest]);
 
-  return { farms, addFarm, removeFarm, resetToDefault, mounted: ready };
+  return { farms, addFarm, removeFarm, resetToDefault, mounted: ready, loadError, retryLoad };
 }
 
 // ── Farmer Profile Store ──────────────────────────────────────────────────────

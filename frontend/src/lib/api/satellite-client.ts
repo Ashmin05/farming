@@ -3,7 +3,7 @@
  * Used only for real, signed-in-owned farms — see useFarmSatelliteAnalysis.ts for the
  * hook that decides whether a given farm id is real (backend UUID) or a guest/demo id.
  */
-import { getAccessToken } from "@/lib/auth/auth-client";
+import { authorizedFetch, getAccessToken } from "@/lib/auth/auth-client";
 
 const API_ROOT = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1").replace(
   /\/api\/v1\/?$/,
@@ -57,15 +57,13 @@ function extractErrorMessage(payload: unknown, status: number): string {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const accessToken = getAccessToken();
-  if (!accessToken) throw new SatelliteApiError("Not signed in.", 401);
+  if (!getAccessToken()) throw new SatelliteApiError("Not signed in.", 401);
 
-  const res = await fetch(`${API_ROOT}${path}`, {
+  const res = await authorizedFetch(`${API_ROOT}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      ...init?.headers,
+      ...(init?.headers as Record<string, string> | undefined),
     },
   });
 
@@ -137,17 +135,13 @@ export interface SatelliteLayers {
  * NDWI, EVI, stress classification) plus vectorized stress zones for one
  * scene. Backend-cached for ~12h; can be a real Earth Engine round trip
  * (several seconds), not just a cache read, so callers should show a
- * loading state. Returns `null` when no analysis has run yet for this farm
- * (an expected state for a brand-new farm) instead of throwing.
+ * loading state. Throws on any failure (including 503) -- callers only ask
+ * for a known pass date, so a failure is a real error to show, never an
+ * "empty" result that would read as "no stress zones on this field".
  */
-export async function getSatelliteLayers(farmId: string, date?: string): Promise<SatelliteLayers | null> {
+export function getSatelliteLayers(farmId: string, date?: string): Promise<SatelliteLayers> {
   const query = date ? `?date=${encodeURIComponent(date)}` : "";
-  try {
-    return await satelliteFetch<SatelliteLayers>(farmId, `/layers${query}`);
-  } catch (err) {
-    if (err instanceof SatelliteApiError && err.status === 503) return null;
-    throw err;
-  }
+  return satelliteFetch<SatelliteLayers>(farmId, `/layers${query}`);
 }
 
 export interface TimeseriesPoint {

@@ -2,6 +2,7 @@
 in-memory SQLite DB (via the `satellite_repository` fixture) but no real
 Earth Engine calls."""
 
+import asyncio
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +10,7 @@ import pytest
 
 from app.integrations.earth_engine_client import (
     EarthEngineNotConfiguredError,
+    EarthEngineRequestError,
     FieldAnalysisResult,
     IndexStats,
     NoSentinelImageryAvailableError,
@@ -166,6 +168,55 @@ class TestRefreshAnalysis:
         service = SatelliteService(satellite_repository, fake_ee_client)
 
         with pytest.raises(SatelliteAnalysisError):
+            await service.refresh_analysis(farm)
+
+    async def test_concurrent_refreshes_for_one_farm_share_a_single_earth_engine_run(
+        self, satellite_repository: SatelliteRepository, farm_service: FarmService, user_repository
+    ) -> None:
+        # e.g. the post-create background refresh + the UI's first analysis
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user)
+
+        async def slow_analysis(_polygon):
+            await asyncio.sleep(0.05)  # long enough for the second caller to arrive mid-run
+            return _sample_result()
+
+        fake_ee_client = MagicMock()
+        fake_ee_client.analyze_field = AsyncMock(side_effect=slow_analysis)
+        service = SatelliteService(satellite_repository, fake_ee_client)
+
+        first, second = await asyncio.gather(service.refresh_analysis(farm), service.refresh_analysis(farm))
+
+        assert fake_ee_client.analyze_field.await_count == 1
+        assert first.id == second.id
+
+    async def test_sequential_refreshes_each_run_a_new_analysis(
+        self, satellite_repository: SatelliteRepository, farm_service: FarmService, user_repository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user)
+        fake_ee_client = MagicMock()
+        fake_ee_client.analyze_field = AsyncMock(return_value=_sample_result())
+        service = SatelliteService(satellite_repository, fake_ee_client)
+
+        first = await service.refresh_analysis(farm)
+        second = await service.refresh_analysis(farm)
+
+        assert fake_ee_client.analyze_field.await_count == 2
+        assert first.id != second.id
+
+    async def test_wraps_earth_engine_request_error_as_satellite_analysis_error(
+        self, satellite_repository: SatelliteRepository, farm_service: FarmService, user_repository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user)
+        fake_ee_client = MagicMock()
+        fake_ee_client.analyze_field = AsyncMock(
+            side_effect=EarthEngineRequestError("Earth Engine request failed: quota exceeded")
+        )
+        service = SatelliteService(satellite_repository, fake_ee_client)
+
+        with pytest.raises(SatelliteAnalysisError, match="quota exceeded"):
             await service.refresh_analysis(farm)
 
     async def test_wraps_no_imagery_error_as_satellite_analysis_error(

@@ -27,6 +27,12 @@ export function useFarmSatelliteLayers(farmId: string | undefined, imageDate: st
     isRealFarm,
     layers: isRealFarm ? query.data ?? null : null,
     isLoading: isRealFarm && !!imageDate && query.isLoading,
-    isError: query.isError,
+    error:
+      isRealFarm && query.isError
+        ? query.error instanceof Error
+          ? query.error.message
+          : "Couldn't load the map layers."
+        : null,
+    retry: query.refetch,
   };
 }

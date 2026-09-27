@@ -17,6 +17,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
+import FarmsLoadError from "@/components/FarmsLoadError";
 import MapView from "@/components/map/MapView";
 import { useFarmStore, Farm, FarmDraft } from "@/lib/stores/farmStore";
 import {
@@ -543,7 +544,7 @@ function RegisterFarmModal({
 // ── Main Farms View ───────────────────────────────────────────────────────────
 
 export default function FarmsPage() {
-  const { farms, addFarm, mounted } = useFarmStore();
+  const { farms, addFarm, mounted, loadError, retryLoad } = useFarmStore();
   const [showModal, setShowModal] = useState(false);
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
@@ -551,6 +552,14 @@ export default function FarmsPage() {
   // flash it (keep the sidebar so the layout doesn't jump).
   if (!mounted) {
     return <AppLayout>{null}</AppLayout>;
+  }
+
+  if (loadError) {
+    return (
+      <AppLayout>
+        <FarmsLoadError message={loadError} onRetry={() => retryLoad()} />
+      </AppLayout>
+    );
   }
 
   return (

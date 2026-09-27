@@ -19,7 +19,7 @@ import { FarmSatellite } from "@/lib/stores/farmStore";
 import SeasonCurveChart, { SeasonCurvePoint } from "@/components/charts/SeasonCurveChart";
 import {
   Leaf, TrendingDown, TrendingUp, Droplets, AlertTriangle,
-  CheckCircle2, Activity, MoonStar
+  CheckCircle2, Activity, MoonStar, RefreshCw
 } from "lucide-react";
 
 export type SatelliteMapLayer = "rgb" | "ndvi" | "ndwi" | "evi" | "stress";
@@ -90,6 +90,34 @@ function CanopyDonut({ satellite }: { satellite: FarmSatellite }) {
   );
 }
 
+function LoadError({
+  message,
+  onRetry,
+  className = "",
+}: {
+  message: string;
+  onRetry?: () => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      className={`p-6 flex flex-col items-center justify-center gap-2 text-center text-xs text-red-900 bg-red-50 border border-red-200 rounded-xl ${className}`}
+    >
+      <AlertTriangle className="w-5 h-5 text-red-600" />
+      <p>{message}</p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-300 bg-white font-semibold hover:bg-red-100"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 export interface PanelStressZone {
   id: string;
   name: string;
@@ -118,11 +146,17 @@ export default function SatelliteAnalyticsPanel({
     emptyMessage?: string;
     selectedKey?: string;
     onSelectPoint?: (point: SeasonCurvePoint) => void;
+    /** Set when the timeseries failed to load -- shown instead of the empty message. */
+    error?: string | null;
+    onRetry?: () => void;
   };
   stressZones: {
     items: PanelStressZone[];
     badge: ReactNode;
     isLoading?: boolean;
+    /** Set when the zones failed to load -- never shown as "no zones detected". */
+    error?: string | null;
+    onRetry?: () => void;
   };
 }) {
   const curve = seasonCurve.points;
@@ -199,7 +233,9 @@ export default function SatelliteAnalyticsPanel({
             {seasonCurve.badge}
           </div>
 
-          {curve.length > 0 ? (
+          {seasonCurve.error ? (
+            <LoadError message={seasonCurve.error} onRetry={seasonCurve.onRetry} className="h-[220px]" />
+          ) : curve.length > 0 ? (
             <>
               <SeasonCurveChart
                 points={curve}
@@ -260,14 +296,16 @@ export default function SatelliteAnalyticsPanel({
             <p className="text-xs text-farm-muted">Automated satellite anomaly classification per field segment</p>
             <div className="mt-1.5">{stressZones.badge}</div>
           </div>
-          {!stressZones.isLoading && (
+          {!stressZones.isLoading && !stressZones.error && (
           <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
             {stressZones.items.length} {stressZones.items.length === 1 ? "Zone" : "Zones"} Detected
           </span>
           )}
         </div>
 
-        {stressZones.isLoading ? (
+        {stressZones.error ? (
+          <LoadError message={stressZones.error} onRetry={stressZones.onRetry} />
+        ) : stressZones.isLoading ? (
           <div className="p-6 text-center text-xs text-farm-muted bg-farm-gray rounded-xl">
             Loading stress zones for this pass…
           </div>

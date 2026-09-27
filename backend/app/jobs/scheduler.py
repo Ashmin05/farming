@@ -49,23 +49,31 @@ async def run_nightly_timeseries_refresh() -> None:
             FarmAlertRepository(session),
         )
 
-        farms = await farm_repository.list_all()
-        logger.info("Nightly satellite timeseries job starting for %d farm(s).", len(farms))
+        # Ids, not ORM objects: the per-farm rollback below expires every
+        # loaded object, and an expired attribute can't lazy-load in async.
+        farm_ids = [farm.id for farm in await farm_repository.list_all()]
+        logger.info("Nightly satellite timeseries job starting for %d farm(s).", len(farm_ids))
 
         refreshed = 0
-        for farm in farms:
+        for farm_id in farm_ids:
             try:
+                farm = await farm_repository.get_by_id(farm_id)
+                if farm is None:  # deleted since the job started
+                    continue
                 await satellite_service.build_timeseries(farm)
                 refreshed += 1
             except SatelliteAnalysisError as exc:
-                logger.info("Timeseries refresh skipped for farm %s: %s", farm.id, exc)
+                logger.info("Timeseries refresh skipped for farm %s: %s", farm_id, exc)
             except Exception:  # noqa: BLE001 -- one bad farm must not kill the batch
-                logger.exception("Unexpected error refreshing timeseries for farm %s", farm.id)
+                logger.exception("Unexpected error refreshing timeseries for farm %s", farm_id)
+                # A failed commit leaves the shared session unusable (every
+                # later farm would raise PendingRollbackError) -- reset it.
+                await session.rollback()
 
         logger.info(
             "Nightly satellite timeseries job finished: %d/%d farm(s) refreshed.",
             refreshed,
-            len(farms),
+            len(farm_ids),
         )
 
 
@@ -86,23 +94,29 @@ async def run_nightly_environment_refresh() -> None:
             environment_snapshot_repository=EnvironmentSnapshotRepository(session),
         )
 
-        farms = await farm_repository.list_all()
-        logger.info("Nightly environment refresh job starting for %d farm(s).", len(farms))
+        # Ids, not ORM objects: the per-farm rollback below expires every
+        # loaded object, and an expired attribute can't lazy-load in async.
+        farm_ids = [farm.id for farm in await farm_repository.list_all()]
+        logger.info("Nightly environment refresh job starting for %d farm(s).", len(farm_ids))
 
         refreshed = 0
-        for farm in farms:
+        for farm_id in farm_ids:
             try:
+                farm = await farm_repository.get_by_id(farm_id)
+                if farm is None:  # deleted since the job started
+                    continue
                 await satellite_service.refresh_environment(farm)
                 refreshed += 1
             except SatelliteAnalysisError as exc:
-                logger.info("Environment refresh skipped for farm %s: %s", farm.id, exc)
+                logger.info("Environment refresh skipped for farm %s: %s", farm_id, exc)
             except Exception:  # noqa: BLE001 -- one bad farm must not kill the batch
-                logger.exception("Unexpected error refreshing environment for farm %s", farm.id)
+                logger.exception("Unexpected error refreshing environment for farm %s", farm_id)
+                await session.rollback()  # same reason as the timeseries job above
 
         logger.info(
             "Nightly environment refresh job finished: %d/%d farm(s) refreshed.",
             refreshed,
-            len(farms),
+            len(farm_ids),
         )
 
 

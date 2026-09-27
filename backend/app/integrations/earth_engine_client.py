@@ -145,6 +145,13 @@ class EarthEngineTimeoutError(Exception):
     """Raised when a call to Earth Engine doesn't finish within the timeout."""
 
 
+class EarthEngineRequestError(Exception):
+    """Raised when Earth Engine itself rejects or fails a request (quota,
+    a server-side computation error, a transient backend failure, ...) --
+    any `ee.EEException` from a network call. Callers turn it into a clean
+    503 instead of letting it escape as an unhandled 500."""
+
+
 class NoSentinelImageryAvailableError(Exception):
     """Raised when no Sentinel-2 scene at all covers the field in the
     analysis window (regardless of cloud cover) -- distinct from a timeout
@@ -386,6 +393,8 @@ class EarthEngineClient:
             raise EarthEngineTimeoutError(
                 f"Earth Engine call did not complete within {timeout}s."
             ) from exc
+        except ee.EEException as exc:
+            raise EarthEngineRequestError(f"Earth Engine request failed: {exc}") from exc
 
     async def _get_map_id(
         self, image, vis_params: dict, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
@@ -405,6 +414,8 @@ class EarthEngineClient:
             raise EarthEngineTimeoutError(
                 f"Earth Engine call did not complete within {timeout}s."
             ) from exc
+        except ee.EEException as exc:
+            raise EarthEngineRequestError(f"Earth Engine request failed: {exc}") from exc
 
     async def count_recent_sentinel2_images(
         self,
