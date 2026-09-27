@@ -17,6 +17,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type DotItemDotProps,
   type TooltipContentProps,
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
@@ -35,6 +36,9 @@ export interface SeasonCurvePoint {
 
 const FIELD_COLOR = "#059669"; // emerald-600
 const BENCHMARK_COLOR = "#94a3b8"; // slate-400
+// How many of the most recent passes get an NDVI value label directly on the
+// chart -- the present pass plus its two prior readings.
+const RECENT_LABEL_COUNT = 3;
 
 function SeasonTooltip({ active, payload }: TooltipContentProps<ValueType, NameType>) {
   if (!active || !payload?.length) return null;
@@ -67,6 +71,41 @@ export default function SeasonCurveChart({
   onSelectPoint?: (point: SeasonCurvePoint) => void;
 }) {
   const selected = points.find((p) => p.key === selectedKey);
+  const latestIndex = points.length - 1;
+  const recentLabelStartIndex = Math.max(0, points.length - RECENT_LABEL_COUNT);
+
+  // Highlights the present (most recent) pass with a bigger "Now" marker, and
+  // labels its NDVI value along with the last couple of prior passes.
+  const renderFieldDot = (props: DotItemDotProps) => {
+    const { cx, cy, index, payload } = props as DotItemDotProps & { payload: SeasonCurvePoint };
+    if (cx == null || cy == null || index == null || !payload) return <g key={`dot-${index}`} />;
+    const isLatest = index === latestIndex;
+    const showLabel = index >= recentLabelStartIndex;
+    return (
+      <g key={`dot-${payload.key}`}>
+        {isLatest ? (
+          <>
+            <circle cx={cx} cy={cy} r={9} fill={FIELD_COLOR} fillOpacity={0.18} />
+            <circle cx={cx} cy={cy} r={5} fill={FIELD_COLOR} stroke="#ffffff" strokeWidth={2} />
+          </>
+        ) : (
+          <circle cx={cx} cy={cy} r={4} fill="#ffffff" stroke={FIELD_COLOR} strokeWidth={2} />
+        )}
+        {showLabel && (
+          <text
+            x={cx}
+            y={cy - (isLatest ? 16 : 10)}
+            textAnchor="middle"
+            fontSize={9}
+            fontWeight={isLatest ? 700 : 600}
+            fill={isLatest ? FIELD_COLOR : "#64748b"}
+          >
+            {isLatest ? `Now · ${payload.ndvi.toFixed(2)}` : payload.ndvi.toFixed(2)}
+          </text>
+        )}
+      </g>
+    );
+  };
 
   return (
     <div className="w-full" style={{ height }}>
@@ -117,8 +156,8 @@ export default function SeasonCurveChart({
             name="Field NDVI"
             stroke={FIELD_COLOR}
             strokeWidth={3}
-            dot={{ r: 4, fill: "#ffffff", stroke: FIELD_COLOR, strokeWidth: 2 }}
-            activeDot={{ r: 6, fill: FIELD_COLOR, stroke: "#ffffff", strokeWidth: 2 }}
+            dot={renderFieldDot}
+            activeDot={{ r: 7, fill: FIELD_COLOR, stroke: "#ffffff", strokeWidth: 2 }}
             isAnimationActive={false}
           />
         </LineChart>

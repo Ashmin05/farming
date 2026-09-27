@@ -293,7 +293,8 @@ function SatelliteContent() {
       <div className="relative rounded-3xl overflow-hidden border border-farm-border-color shadow-card bg-white">
         <MapView
           height="440px"
-          flyToCenter={selectedFarm.center}
+          flyToCenter={selectedFarm.polygonGeoJson ? undefined : selectedFarm.center}
+          fitToPolygonGeoJson={selectedFarm.polygonGeoJson}
           showDrawControls={false}
           rasterTileUrl={layers?.layers[TILE_KEY_BY_LAYER[activeLayer]] ?? null}
           stressZones={

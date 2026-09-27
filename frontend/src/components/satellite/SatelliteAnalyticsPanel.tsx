@@ -14,13 +14,15 @@
 // demo data + "Demo data" badges for guests.
 // ==============================================================================
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { FarmSatellite } from "@/lib/stores/farmStore";
 import SeasonCurveChart, { SeasonCurvePoint } from "@/components/charts/SeasonCurveChart";
 import {
   Leaf, TrendingDown, TrendingUp, Droplets, AlertTriangle,
-  CheckCircle2, Activity, MoonStar, RefreshCw
+  CheckCircle2, Activity, MoonStar, RefreshCw, ChevronDown, ChevronUp
 } from "lucide-react";
+
+const MAX_VISIBLE_STRESS_ZONES = 3;
 
 export type SatelliteMapLayer = "rgb" | "ndvi" | "ndwi" | "evi" | "stress";
 
@@ -161,6 +163,14 @@ export default function SatelliteAnalyticsPanel({
 }) {
   const curve = seasonCurve.points;
   const latest = curve[curve.length - 1];
+
+  const [showAllZones, setShowAllZones] = useState(false);
+  const zoneIdsKey = stressZones.items.map((z) => z.id).join(",");
+  useEffect(() => {
+    setShowAllZones(false);
+  }, [zoneIdsKey]);
+  const visibleZones = showAllZones ? stressZones.items : stressZones.items.slice(0, MAX_VISIBLE_STRESS_ZONES);
+  const hiddenZoneCount = stressZones.items.length - MAX_VISIBLE_STRESS_ZONES;
 
   return (
     <div className="space-y-6">
@@ -311,7 +321,7 @@ export default function SatelliteAnalyticsPanel({
           </div>
         ) : stressZones.items.length > 0 ? (
           <div className="space-y-3">
-            {stressZones.items.map((zone) => (
+            {visibleZones.map((zone) => (
               <div key={zone.id} className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -328,6 +338,22 @@ export default function SatelliteAnalyticsPanel({
                 </p>
               </div>
             ))}
+            {hiddenZoneCount > 0 && (
+              <button
+                onClick={() => setShowAllZones((v) => !v)}
+                className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-farm-green hover:text-farm-green-dark py-2 rounded-xl border border-dashed border-farm-border-color hover:border-farm-green transition-colors"
+              >
+                {showAllZones ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" /> Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" /> See {hiddenZoneCount} more {hiddenZoneCount === 1 ? "zone" : "zones"}
+                  </>
+                )}
+              </button>
+            )}
           </div>
         ) : (
           <div className="p-6 text-center text-xs text-farm-muted bg-farm-gray rounded-xl">
