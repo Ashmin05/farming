@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, AlertCircle, User as UserIcon } from "lucide-react";
+import { CheckCircle2, AlertCircle, User as UserIcon, Pencil, Save } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { getCurrentUser, updateProfile, isAuthenticated, AuthError, type AuthUser } from "@/lib/auth/auth-client";
 import { saveProfile, getStoredProfile } from "@/lib/stores/farmStore";
@@ -45,6 +45,10 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState(false);
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // A profile that's already complete opens read-only with an "Edit Profile"
+  // button; an incomplete one (fresh signup) opens straight into edit mode
+  // since the farmer still needs to fill in the required fields.
+  const [isEditing, setIsEditing] = useState(false);
 
   const loadUser = useCallback(async () => {
     if (!isAuthenticated()) {
@@ -66,6 +70,7 @@ export default function ProfilePage() {
     setPhone(current.phone ?? "");
     setState(current.state ?? "Maharashtra");
     setLocation(current.location ?? "");
+    setIsEditing(!current.profile_complete);
     setLoading(false);
   }, [router]);
 
@@ -91,6 +96,7 @@ export default function ProfilePage() {
       const existing = getStoredProfile();
       saveProfile({ ...existing, name: name.trim() || existing.name, phone: phone.trim(), state, location: location.trim() });
       setSuccess(true);
+      setIsEditing(false);
     } catch (err) {
       setError(err instanceof AuthError ? err.message : "Could not save your profile. Please try again.");
     } finally {
@@ -170,10 +176,11 @@ export default function ProfilePage() {
                 id="profile-name"
                 type="text"
                 required
+                disabled={!isEditing}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Your name"
-                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green"
+                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green disabled:bg-farm-gray disabled:text-farm-muted disabled:cursor-not-allowed"
               />
             </div>
 
@@ -190,13 +197,14 @@ export default function ProfilePage() {
                   type="tel"
                   inputMode="numeric"
                   required
+                  disabled={!isEditing}
                   pattern="\d{10}"
                   maxLength={10}
                   title="Enter a 10-digit mobile number"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                   placeholder="9876543210"
-                  className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white"
+                  className="flex-1 px-4 py-2.5 border border-farm-border-color rounded-r-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white disabled:bg-farm-gray disabled:text-farm-muted disabled:cursor-not-allowed"
                 />
               </div>
             </div>
@@ -208,9 +216,10 @@ export default function ProfilePage() {
               <select
                 id="profile-state"
                 required
+                disabled={!isEditing}
                 value={state}
                 onChange={(e) => setState(e.target.value)}
-                className="w-full px-3 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white text-farm-dark font-medium"
+                className="w-full px-3 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green bg-white text-farm-dark font-medium disabled:bg-farm-gray disabled:text-farm-muted disabled:cursor-not-allowed"
               >
                 {states.map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -225,10 +234,11 @@ export default function ProfilePage() {
               <input
                 id="profile-location"
                 type="text"
+                disabled={!isEditing}
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 placeholder="e.g. Nashik"
-                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green"
+                className="w-full px-4 py-2.5 border border-farm-border-color rounded-lg text-sm focus:outline-none focus:border-farm-green focus:ring-1 focus:ring-farm-green disabled:bg-farm-gray disabled:text-farm-muted disabled:cursor-not-allowed"
               />
             </div>
 
@@ -246,13 +256,23 @@ export default function ProfilePage() {
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {submitting ? "Saving..." : "Save Profile"}
-            </button>
+            {isEditing ? (
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <Save className="w-4 h-4" /> {submitting ? "Saving..." : "Save Profile"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setSuccess(false); setIsEditing(true); }}
+                className="w-full flex items-center justify-center gap-2 bg-farm-green text-white py-3 rounded-xl font-semibold hover:bg-farm-green-dark transition-all duration-150 shadow-sm hover:shadow-md"
+              >
+                <Pencil className="w-4 h-4" /> Edit Profile
+              </button>
+            )}
           </form>
         </div>
       </div>
