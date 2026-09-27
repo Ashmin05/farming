@@ -218,7 +218,7 @@ function ForecastBody({
       ) : (
         <>
           <PriceForecastChart history={history} forecasts={available ? forecasts : []} today={today} highlightHorizon={highlightHorizon} />
-          <PriceForecastLegend />
+          <PriceForecastLegend withEstimate={available && forecasts.length > 0} />
         </>
       )}
       {available && (

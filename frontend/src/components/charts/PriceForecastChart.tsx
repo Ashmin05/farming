@@ -109,6 +109,10 @@ export default function PriceForecastChart({
   points.sort((a, b) => a.t - b.t);
 
   const end = Math.max(todayT + 30 * DAY_MS, ...points.map((p) => p.t));
+  // Fixed date ticks every 15 days, so the axis reads the same however
+  // sparse the data is (Recharts would otherwise tick only data points).
+  const ticks: number[] = [];
+  for (let t = start; t <= end; t += 15 * DAY_MS) ticks.push(t);
   const values = points.flatMap((p) => [p.live, p.estimate, ...(p.band ?? [])].filter((v): v is number => v !== null));
   const lo = values.length ? Math.min(...values) : 0;
   const hi = values.length ? Math.max(...values) : 100;
@@ -124,6 +128,7 @@ export default function PriceForecastChart({
             type="number"
             scale="time"
             domain={[start, end]}
+            ticks={ticks}
             tickFormatter={(t: number) => shortDate(new Date(t).toISOString())}
             tick={{ fontSize: 10, fill: "#64748b" }}
             tickLine={false}
@@ -169,12 +174,16 @@ export default function PriceForecastChart({
 }
 
 /** Legend under the chart: text + line style, never colour alone. */
-export function PriceForecastLegend() {
+export function PriceForecastLegend({ withEstimate = true }: { withEstimate?: boolean }) {
   return (
     <div className="flex flex-wrap gap-4 text-[11px] text-farm-muted">
       <span className="inline-flex items-center gap-1.5"><span className="w-5 h-0.5 inline-block" style={{ background: LIVE }} /> Live · actual modal price</span>
-      <span className="inline-flex items-center gap-1.5"><span className="w-5 border-t-2 border-dashed inline-block" style={{ borderColor: ESTIMATE }} /> Estimate</span>
-      <span className="inline-flex items-center gap-1.5"><span className="w-4 h-3 bg-sky-500/20 inline-block rounded-sm" /> Expected range (80%)</span>
+      {withEstimate && (
+        <>
+          <span className="inline-flex items-center gap-1.5"><span className="w-5 border-t-2 border-dashed inline-block" style={{ borderColor: ESTIMATE }} /> Estimate</span>
+          <span className="inline-flex items-center gap-1.5"><span className="w-4 h-3 bg-sky-500/20 inline-block rounded-sm" /> Expected range (80%)</span>
+        </>
+      )}
       <span className="inline-flex items-center gap-1.5"><span className="w-px h-3 bg-slate-600 inline-block" /> Today</span>
     </div>
   );
