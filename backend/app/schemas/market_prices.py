@@ -188,15 +188,18 @@ class ForecastModelOut(BaseModel):
     interval: dict
 
 
-class ForecastOut(BaseModel):
-    market: MarketOut
-    commodity: CommodityRef
+class ForecastOutBase(BaseModel):
     available: bool
     reason: str | None
     generated_at: datetime | None = None
     forecasts: list[ForecastPointOut]
     models: list[ForecastModelOut]
     disclaimer: str
+
+
+class ForecastOut(ForecastOutBase):
+    market: MarketOut
+    commodity: CommodityRef
 
 
 class OutlookOut(BaseModel):
@@ -221,5 +224,103 @@ class FarmMarketOut(BaseModel):
     district: str | None
     selected_commodity: CommodityRef | None
     nearby: list[NearbyMarketOut]
+    attribution: str | None
+    message: str | None
+
+
+class FarmForecastMarketOut(MarketOut):
+    distance_km: float | None
+    model_ready: bool
+
+
+class FarmNearbyMarketOut(NearbyMarketOut):
+    model_ready: bool
+
+
+class HorizonOptionOut(BaseModel):
+    horizon_days: int
+    forecast_date: date
+    predicted_price: float
+    expected_gain: float
+    expected_gain_pct: float
+    holding_cost: float
+    net_gain: float
+    typical_error: float | None
+    typical_error_basis: str | None
+    gain_range: list[float] | None
+    worth_holding: bool
+    model_name: str
+
+
+class ExpectedGainOut(BaseModel):
+    per_quintal: float
+    pct: float
+    horizon_days: int
+    by_date: date
+    predicted_price: float
+
+
+class ErrorRangeOut(BaseModel):
+    typical_error: float | None
+    basis: str | None
+    low: float | None
+    high: float | None
+    level: float
+
+
+class HoldingCostOut(BaseModel):
+    pct_per_30_days: float
+    assumed: bool
+    configured: bool
+    per_quintal: float | None = None
+    horizon_days: int | None = None
+
+
+class BestNearbyOut(BaseModel):
+    market_id: int
+    market: str
+    district: str | None
+    distance_km: float | None
+    coordinate_precision: str | None
+    modal_price: float
+    as_of: date
+    is_selected: bool
+    difference_vs_selected: float | None
+    note: str
+
+
+class RecommendationOut(BaseModel):
+    action: str  # "hold" | "sell_now" | "unavailable"
+    headline: str
+    hold_days: int | None
+    reason: str
+    commodity: str | None
+    market: str | None
+    base_price: float | None
+    base_date: date | None
+    expected_gain: ExpectedGainOut | None
+    error_range: ErrorRangeOut | None
+    holding_cost: HoldingCostOut | None
+    horizons: list[HorizonOptionOut]
+    perishable: bool
+    warning: str | None
+    best_nearby: BestNearbyOut | None
+    disclaimer: str
+
+
+class FarmForecastOut(BaseModel):
+    farm_id: str
+    crop: str
+    commodities: list[CommodityRef]
+    selected_commodity: CommodityRef | None
+    state: str | None
+    district: str | None
+    market: FarmForecastMarketOut | None
+    today: MarketStatsOut | None
+    unit: str = "Rs/quintal"
+    history: list[HistoryPointOut]
+    forecast: ForecastOutBase
+    recommendation: RecommendationOut
+    nearby: list[FarmNearbyMarketOut]
     attribution: str | None
     message: str | None

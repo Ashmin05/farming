@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { marketApi } from "@/lib/api/market-client";
 import { isRealFarmId } from "@/lib/hooks/useFarmSatelliteAnalysis";
 
@@ -81,5 +81,19 @@ export function useFarmMarketPrices(farmId?: string) {
     queryFn: () => marketApi.farm(farmId as string),
     enabled: isRealFarm,
     staleTime: STALE,
+  });
+}
+
+/** Sell/hold suggestion + forecast for the owner's farm. With no crop/mandi
+ * given, the backend picks the farm's crop and nearest mandi with a forecast. */
+export function useFarmMarketForecast(farmId?: string, commodityId?: number, marketId?: number) {
+  const isRealFarm = isRealFarmId(farmId);
+  return useQuery({
+    queryKey: ["market", "farm-forecast", farmId, commodityId ?? null, marketId ?? null],
+    queryFn: () => marketApi.farmForecast(farmId as string, { commodityId, marketId }),
+    enabled: isRealFarm,
+    staleTime: STALE,
+    // Switching crop/mandi keeps the last answer on screen until the new one lands.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === farmId ? keepPreviousData(prev) : undefined),
   });
 }

@@ -32,6 +32,8 @@
 #   @mapbox/mapbox-gl-draw@^1.5.2 – Field boundary drawing tools
 #   @turf/turf@^7.4.0             – Geospatial calculations (area, centroid)
 #   @tanstack/react-query@^5.103  – Server state management and caching
+#   recharts@^3.10.1              – Charts (NDVI season curve, mandi price trend,
+#                                   PriceForecastChart: 90 days Live + 30 days Estimate)
 #
 # External services used by the frontend:
 #   Mapbox GL tiles + Geocoding API (farm location search)
@@ -64,5 +66,15 @@
 #   asyncpg                       – Async PostgreSQL driver
 #   alembic                       – Async database migrations (backend/alembic/)
 #   httpx / requests              – HTTP clients for external API integrations
+#   apscheduler                   – Nightly jobs (satellite, environment, mandi prices + forecasts)
+#   tenacity                      – Retries for flaky external APIs (mandi price providers)
+#   numpy / pandas                – Mandi price time series (lags, rolling windows)
+#   scikit-learn / lightgbm       – Price forecast models (ridge, random forest, gradient-boosted trees)
+#   joblib                        – Trained model artifacts (PRICE_MODEL_DIR)
+#
+# The Market page's sell-now / hold-N-days suggestion
+# (app/services/market_prices/price_service.py) needs no extra package: it
+# only reads stored prices and forecasts. Its holding-cost assumptions are
+# settings (MARKET_HOLDING_COST_PCT etc., see .env.example).
 #
 # Python version required: 3.10+

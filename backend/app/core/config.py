@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     # Where trained price-forecast models are written (gitignored). Relative
     # paths are resolved against backend/.
     PRICE_MODEL_DIR: str = "models_store"
+    # Sell-or-hold suggestion (app/services/market_prices/price_service.py).
+    # Assumed cost of holding a crop, as % of its value per 30 days: storage
+    # charges plus weight/quality loss. Rough planning figures, not measured
+    # -- tune them per region. "Commodity:pct" pairs keyed by Agmarknet
+    # commodity name; anything unlisted uses the default.
+    MARKET_HOLDING_COST_PCT: str = (
+        "Wheat:1,Rice:1,Paddy(Common):1,Maize:1.5,Soyabean:1.5,Cotton:1,Dry Chillies:2,"
+        "Potato:3,Onion:4,Green Chilli:15,Tomato:20,Sugarcane:10"
+    )
+    MARKET_HOLDING_COST_DEFAULT_PCT: float = 3.0
+    # Crops that spoil within days without cold storage; the UI warns that
+    # holding may not be possible at all.
+    MARKET_PERISHABLE_COMMODITIES: str = "Tomato,Green Chilli,Sugarcane"
 
     @property
     def price_model_dir(self) -> Path:
@@ -91,6 +104,19 @@ class Settings(BaseSettings):
     @property
     def market_price_commodities(self) -> list[str]:
         return _csv(self.MARKET_PRICE_COMMODITIES)
+
+    @property
+    def market_holding_costs(self) -> dict[str, float]:
+        costs = {}
+        for pair in _csv(self.MARKET_HOLDING_COST_PCT):
+            name, _, pct = pair.rpartition(":")
+            if name.strip():
+                costs[name.strip()] = float(pct)
+        return costs
+
+    @property
+    def market_perishable_commodities(self) -> list[str]:
+        return _csv(self.MARKET_PERISHABLE_COMMODITIES)
 
 
 def _csv(value: str) -> list[str]:

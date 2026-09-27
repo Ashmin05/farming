@@ -16,6 +16,7 @@ from app.repositories.farm_repository import FarmRepository
 from app.schemas.market_prices import (
     AnalyticsOut,
     CommodityOut,
+    FarmForecastOut,
     FarmMarketOut,
     ForecastOut,
     HistoryOut,
@@ -28,6 +29,7 @@ from app.schemas.market_prices import (
 )
 from app.services.farm_service import FarmNotFoundError, FarmService
 from app.services.market_prices import queries as q
+from app.services.market_prices.price_service import PriceService
 
 router = APIRouter(prefix="/market-prices", tags=["market-prices"])
 farm_router = APIRouter(tags=["market-prices"])
@@ -282,6 +284,36 @@ async def quality(days: int = Query(90, ge=7, le=730), session: AsyncSession = D
     return await quality_report(session, today=q.today_utc(), window_days=days)
 
 
+async def _own_farm(session: AsyncSession, user: User, farm_id: uuid.UUID):
+    try:
+        return await FarmService(FarmRepository(session)).get_farm(user, farm_id)
+    except FarmNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
+
+
+@farm_router.get("/farms/{farm_id}/market/forecast", response_model=FarmForecastOut)
+async def farm_market_forecast(
+    farm_id: uuid.UUID,
+    commodity_id: int | None = None,
+    market_id: int | None = None,
+    radius_km: float = Query(100, gt=0, le=500),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """The farm's crop at the nearest mandi with a forecast (or the given
+    commodity/mandi): live price, 90 days of history, 7/14/30-day estimates,
+    nearby mandis, and a sell-now / hold-N-days suggestion that only says
+    hold when the estimated rise beats the model's error plus an assumed
+    holding cost. Estimates, never guaranteed prices."""
+    farm = await _own_farm(session, current_user, farm_id)
+    try:
+        return await PriceService(session).farm_forecast(
+            farm, commodity_id=commodity_id, market_id=market_id, radius_km=radius_km
+        )
+    except (q.NotFoundError, q.AmbiguousError) as exc:
+        _raise(exc)
+
+
 @farm_router.get("/farms/{farm_id}/market-prices", response_model=FarmMarketOut)
 async def farm_market_prices(
     farm_id: uuid.UUID,
@@ -292,10 +324,7 @@ async def farm_market_prices(
 ):
     """The farm's crop mapped to mandi commodities, and nearby markets for
     it from the farm's centre point / district / state."""
-    try:
-        farm = await FarmService(FarmRepository(session)).get_farm(current_user, farm_id)
-    except FarmNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
+    farm = await _own_farm(session, current_user, farm_id)
     ctx = await q.farm_context(session, farm)
     commodities = ctx["commodities"]
     selected = next((c for c in commodities if c.id == commodity_id), None) if commodity_id else None

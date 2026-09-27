@@ -116,6 +116,8 @@ export interface NearbyMarket extends MarketStats {
   distance_km: number | null;
   scope: "radius" | "district" | "state";
   coordinate_precision: "place" | "district" | null;
+  /** Only on /farms/{id}/market/forecast: a stored estimate exists for this mandi. */
+  model_ready?: boolean;
 }
 
 export interface NearbyMarkets {
@@ -184,6 +186,69 @@ export interface FarmMarketPrices {
   message: string | null;
 }
 
+export interface HorizonOption {
+  horizon_days: number;
+  forecast_date: string;
+  predicted_price: number;
+  expected_gain: number;
+  expected_gain_pct: number;
+  holding_cost: number;
+  net_gain: number;
+  typical_error: number | null;
+  typical_error_basis: "mape" | "mae" | null;
+  gain_range: [number, number] | null;
+  worth_holding: boolean;
+  model_name: string;
+}
+
+export interface PriceRecommendation {
+  action: "hold" | "sell_now" | "unavailable";
+  headline: string;
+  hold_days: number | null;
+  reason: string;
+  commodity: string | null;
+  market: string | null;
+  base_price: number | null;
+  base_date: string | null;
+  expected_gain: { per_quintal: number; pct: number; horizon_days: number; by_date: string; predicted_price: number } | null;
+  error_range: { typical_error: number | null; basis: string | null; low: number | null; high: number | null; level: number } | null;
+  holding_cost: { pct_per_30_days: number; assumed: boolean; configured: boolean; per_quintal: number | null; horizon_days: number | null } | null;
+  horizons: HorizonOption[];
+  perishable: boolean;
+  warning: string | null;
+  best_nearby: {
+    market_id: number;
+    market: string;
+    district: string | null;
+    distance_km: number | null;
+    coordinate_precision: "place" | "district" | null;
+    modal_price: number;
+    as_of: string;
+    is_selected: boolean;
+    difference_vs_selected: number | null;
+    note: string;
+  } | null;
+  disclaimer: string;
+}
+
+export interface FarmMarketForecast {
+  farm_id: string;
+  crop: string;
+  commodities: CommodityRef[];
+  selected_commodity: CommodityRef | null;
+  state: string | null;
+  district: string | null;
+  market: (MarketInfo & { distance_km: number | null; model_ready: boolean }) | null;
+  today: MarketStats | null;
+  unit: string;
+  history: HistoryPoint[];
+  forecast: Omit<PriceForecast, "market" | "commodity">;
+  recommendation: PriceRecommendation;
+  nearby: NearbyMarket[];
+  attribution: string | null;
+  message: string | null;
+}
+
 function query(params: Record<string, string | number | null | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -247,5 +312,13 @@ export const marketApi = {
     if (!getAccessToken()) throw new MarketApiError("Not signed in.", 401);
     const res = await authorizedFetch(`${API_ROOT}/farms/${farmId}/market-prices${query({ commodity_id: commodityId })}`);
     return parse<FarmMarketPrices>(res);
+  },
+  /** Live price, 90-day history, estimates and the sell/hold suggestion for a farm. */
+  async farmForecast(farmId: string, p: { commodityId?: number; marketId?: number } = {}): Promise<FarmMarketForecast> {
+    if (!getAccessToken()) throw new MarketApiError("Not signed in.", 401);
+    const res = await authorizedFetch(
+      `${API_ROOT}/farms/${farmId}/market/forecast${query({ commodity_id: p.commodityId, market_id: p.marketId })}`
+    );
+    return parse<FarmMarketForecast>(res);
   },
 };
