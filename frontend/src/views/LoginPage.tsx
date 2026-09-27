@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Sprout, ArrowRight, Globe, AlertCircle } from "lucide-react";
+import { ArrowRight, Globe, AlertCircle } from "lucide-react";
 import { login, getCurrentUser, AuthError } from "@/lib/auth/auth-client";
 import GoogleSignInButton from "@/components/GoogleSignInButton";
 
@@ -77,13 +77,10 @@ export default function LoginPage() {
 
       <div className="relative z-10 w-full max-w-sm">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 justify-center mb-6">
-          <div className="w-10 h-10 bg-farm-green rounded-xl flex items-center justify-center shadow-card">
-            <Sprout className="w-5 h-5 text-white" strokeWidth={2.5} />
+        <Link href="/" className="flex justify-center mb-6">
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl px-4 py-2 shadow-card">
+            <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-10 w-auto" priority />
           </div>
-          <span className="font-bold text-2xl text-white drop-shadow-sm">
-            Fasal<span className="text-amber-300">Setu</span>
-          </span>
         </Link>
 
         <div className="bg-white/60 backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/40 p-8">

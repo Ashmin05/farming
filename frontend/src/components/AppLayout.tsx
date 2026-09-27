@@ -1,9 +1,10 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  Sprout, LayoutDashboard, Map, Satellite, IndianRupee,
+  LayoutDashboard, Map, Satellite, IndianRupee,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
   UserCircle
 } from "lucide-react";
@@ -36,13 +37,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Logo */}
         <div className="h-16 flex items-center px-5 border-b border-farm-border-color flex-shrink-0">
-          <Link href="/" className="flex items-center gap-2 group" title="Return to Homepage">
-            <div className="w-8 h-8 bg-farm-green rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
-              <Sprout className="w-4 h-4 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-farm-dark text-base tracking-tight">
-              Fasal<span className="text-farm-green">Setu</span>
-            </span>
+          <Link href="/" className="flex items-center group" title="Return to Homepage">
+            <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-9 w-auto group-hover:scale-105 transition-transform" priority />
           </Link>
         </div>
 
@@ -115,15 +111,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logo / Home redirect in topbar */}
           <Link
             href="/"
-            className="flex items-center gap-2 group hover:opacity-90 transition-opacity"
+            className="flex items-center group hover:opacity-90 transition-opacity"
             title="Return to Homepage"
           >
-            <div className="w-7 h-7 bg-farm-green rounded-lg flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-              <Sprout className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-farm-dark text-base tracking-tight">
-              Fasal<span className="text-farm-green">Setu</span>
-            </span>
+            <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-8 w-auto group-hover:scale-105 transition-transform" />
           </Link>
 
           <div className="flex-1" />
