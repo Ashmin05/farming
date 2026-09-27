@@ -38,7 +38,7 @@ function ChatContent() {
       id: "welcome",
       role: "assistant",
       content:
-        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI can help you with:\n• Crop health & disease diagnosis (Rice, Wheat, Onion, Tomato, Sugarcane)\n• Fertiliser and precision irrigation advice\n• Mandi market prices and best selling time\n• Weather warnings and seasonal field advisories\n\nAsk me anything in English, বাংলা (Bengali), or हिंदी (Hindi)!",
+        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI can help you with:\n• Crop health & disease diagnosis (Rice, Wheat, Onion, Sugarcane, Potato)\n• Fertiliser and precision irrigation advice\n• Mandi market prices and best selling time\n• Weather warnings and seasonal field advisories\n\nAsk me anything in English, বাংলা (Bengali), or हिंदी (Hindi)!",
       timestamp: new Date().toISOString(),
     },
   ]);

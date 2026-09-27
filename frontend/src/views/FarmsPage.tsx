@@ -26,10 +26,7 @@ import {
   Satellite, AlertCircle, Trash2
 } from "lucide-react";
 
-const CROPS = [
-  "Rice", "Wheat", "Onion", "Tomato", "Sugarcane",
-  "Cotton", "Maize", "Soybean", "Potato", "Chilli", "Other",
-];
+const CROPS = ["Rice", "Wheat", "Onion", "Sugarcane", "Potato"];
 
 const STEPS = ["Farm Details", "Crop & Soil", "Draw on Map", "Done"];
 

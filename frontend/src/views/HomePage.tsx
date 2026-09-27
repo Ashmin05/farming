@@ -71,8 +71,8 @@ export default function HomePage() {
     t.cropRice,
     t.cropWheat,
     t.cropOnion,
-    t.cropTomato,
     t.cropSugarcane,
+    t.cropPotato,
   ];
 
   return (
