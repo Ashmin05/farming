@@ -278,7 +278,8 @@ async function publicGet<T>(path: string): Promise<T> {
 }
 
 export const marketApi = {
-  commodities: (state?: string) => publicGet<MarketCommodity[]>(`/market-prices/commodities${query({ state })}`),
+  commodities: (state?: string, include?: string) =>
+    publicGet<MarketCommodity[]>(`/market-prices/commodities${query({ state, include })}`),
   locations: (commodityId?: number) =>
     publicGet<MarketLocationState[]>(`/market-prices/locations${query({ commodity_id: commodityId })}`),
   markets: (p: { commodityId: number; state?: string; district?: string }) =>

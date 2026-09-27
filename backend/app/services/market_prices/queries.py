@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.market_prices.text import commodity_keys, name_key
@@ -150,18 +150,26 @@ async def provenance(session: AsyncSession, *, as_of: date | None, sources: set[
 # ------------------------------------------------------------------ catalogue
 
 
-async def commodities_with_data(session: AsyncSession, state: MarketState | None) -> list[dict]:
+async def commodities_with_data(
+    session: AsyncSession, state: MarketState | None, *, always_include: list[str] | None = None
+) -> list[dict]:
+    """Commodities with stored prices (optionally in one state), plus any
+    `always_include` names even when they have none -- e.g. a crop the UI
+    always offers but that Agmarknet mandis never actually report (cane is
+    procured by mills, not auctioned)."""
+    on_clause = [MarketPriceStats.commodity_id == Commodity.id]
+    if state is not None:
+        on_clause.append(MarketPriceStats.state_id == state.id)
     query = (
         select(
             Commodity.id, Commodity.name, Commodity.commodity_group,
             func.count(MarketPriceStats.market_id), func.max(MarketPriceStats.as_of_date),
         )
-        .join(MarketPriceStats, MarketPriceStats.commodity_id == Commodity.id)
+        .outerjoin(MarketPriceStats, and_(*on_clause))
         .group_by(Commodity.id, Commodity.name, Commodity.commodity_group)
+        .having(or_(func.count(MarketPriceStats.market_id) > 0, Commodity.name.in_(always_include or [])))
         .order_by(Commodity.name)
     )
-    if state is not None:
-        query = query.where(MarketPriceStats.state_id == state.id)
     return [
         {"id": i, "name": n, "commodity_group": g, "markets": c, "latest_date": d}
         for i, n, g, c, d in await session.execute(query)

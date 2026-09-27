@@ -82,10 +82,12 @@ async def _provenance(session, rows: list[dict], *, as_of_key: str = "as_of", so
 
 
 @router.get("/commodities", response_model=list[CommodityOut])
-async def list_commodities(state: str | None = None, session: AsyncSession = Depends(get_db)):
-    """Commodities with stored prices (optionally in one state)."""
+async def list_commodities(state: str | None = None, include: str | None = None, session: AsyncSession = Depends(get_db)):
+    """Commodities with stored prices (optionally in one state), plus any
+    comma-separated `include` names even without data."""
     state_row, _ = await _location(session, state, None)
-    return await q.commodities_with_data(session, state_row)
+    always_include = [n.strip() for n in include.split(",") if n.strip()] if include else None
+    return await q.commodities_with_data(session, state_row, always_include=always_include)
 
 
 @router.get("/locations", response_model=list[StateOut])
