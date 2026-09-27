@@ -98,6 +98,11 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
+- `limit-crop-list` — restricted every crop-selection control app-wide to five crops (Rice, Wheat,
+  Onion, Sugarcane, Potato), instead of offering the full Agmarknet catalogue (§5.16).
+- `market-sugarcane-crop` — fixed Sugarcane being silently missing from the Market page's crop
+  dropdown despite being one of the five allowed crops, and added an honest "no data" notice for
+  it instead of a blank page (§5.16).
 
 ---
 
@@ -1166,6 +1171,43 @@ API tests cover:
 - best mandi nearby and its price difference
 - a sell-now case
 
+### 5.16 Crop list restricted to five crops, and Sugarcane's missing-data fix
+
+Every crop-selection control across the app (`ALLOWED_CROPS` in the relevant view/component) was
+narrowed to just **Rice, Wheat, Onion, Sugarcane, Potato** — the full Agmarknet catalogue (hundreds
+of commodities) was more choice than the product wants to support today.
+
+That surfaced a real bug: the Market page's crop dropdown (`MarketPage.tsx`) called
+`useMarketCommodities()` with no arguments, which hits `GET /market-prices/commodities` — a list
+built from `commodities_with_data()` (`app/services/market_prices/queries.py`), which only ever
+returned commodities that already had stored `MarketPriceStats` rows. Sugarcane had none, so it
+silently never appeared, even though it's one of the five allowed crops.
+
+**Root cause is a real-world data gap, not a bug in the ingestion pipeline**: sugarcane in India is
+procured directly by sugar mills under the Sugarcane Control Order, not auctioned through open APMC
+mandis — confirmed empirically (zero Agmarknet/CEDA records for Sugarcane in both West Bengal and
+Uttar Pradesh, a major cane state). No amount of backfilling fixes this; the data genuinely doesn't
+exist upstream. `Sugarcane` was still added to `MARKET_PRICE_COMMODITIES` (`app/core/config.py`,
+§9's env table) so ingestion keeps trying, in case some mandi ever does start reporting it.
+
+**Fix — show it, but say so honestly** (matching the page's stated "never fake a number" design,
+§5.14):
+- `commodities_with_data()` gained an `always_include: list[str] | None` parameter: a `LEFT OUTER
+  JOIN` (was an inner join) plus a `HAVING count(...) > 0 OR name IN (...)` clause, so a named
+  commodity is returned even with zero price rows.
+- `GET /market-prices/commodities` takes a new `include=` query param (comma-separated names)
+  threaded through to `always_include`.
+- `MarketPage.tsx` calls `useMarketCommodities(undefined, ALLOWED_CROPS.join(","))`, so the
+  dropdown always offers exactly the five allowed crops regardless of data availability.
+- A new notice — "No mandi price data is available for Sugarcane yet. Agmarknet mandis haven't
+  reported any trades for it." — covers the specific case the page's existing empty-state handling
+  didn't: a commodity with literally zero rows anywhere means `stats`/`locations`/`browseState` all
+  end up `undefined`, which previously just rendered nothing below the dropdown.
+
+Verified live: the crop dropdown lists exactly Rice/Wheat/Onion/Sugarcane/Potato; selecting
+Sugarcane shows the new notice with no blank/broken sections; switching back to any real crop
+(Wheat) still renders full live price/mandi/sell-hold sections with no regression.
+
 ---
 
 ## 6. Authentication system (the main feature built so far)
@@ -1370,7 +1412,7 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `CEDA_API_KEY` | Backend | CEDA Agri Market API bearer key (§5.14). Optional: historical fallback archive to 2025-10-30, 40 requests/hour. Backend only, never in `frontend/.env` |
 | `DATA_GOV_IN_API_KEY` | Backend | data.gov.in API key (§5.14). Optional, latest day only; free at https://data.gov.in |
 | `MARKET_PRICE_PROVIDERS` | Backend | Provider fallback order, default `agmarknet,ceda,data_gov_in`. Agmarknet 2.0 needs no key; providers without a key are skipped |
-| `MARKET_PRICE_STATES` / `MARKET_PRICE_COMMODITIES` | Backend | What the nightly job keeps fresh (comma-separated Agmarknet names). Default `West Bengal` × `Potato,Rice,Paddy(Common),Wheat,Tomato,Onion`. Every farm's state × crop is added when `MARKET_PRICE_INCLUDE_FARM_CROPS` is true (default) |
+| `MARKET_PRICE_STATES` / `MARKET_PRICE_COMMODITIES` | Backend | What the nightly job keeps fresh (comma-separated Agmarknet names). Default `West Bengal` × `Potato,Rice,Paddy(Common),Wheat,Tomato,Onion,Sugarcane`. Every farm's state × crop is added when `MARKET_PRICE_INCLUDE_FARM_CROPS` is true (default). Sugarcane never actually gets ingested — no Agmarknet mandi reports it (§5.16) — but stays configured in case one ever does |
 | `MARKET_PRICE_CURRENT_DAYS` | Backend | Days re-fetched each night (default 10: late/revised reports are picked up; the upsert makes the overlap free) |
 | `PRICE_MODEL_DIR` | Backend | Where trained forecast models are written (default `backend/models_store`, gitignored) |
 | `MARKET_HOLDING_COST_PCT` / `MARKET_HOLDING_COST_DEFAULT_PCT` | Backend | Assumed cost of holding a crop (storage + losses) as % of its value per 30 days, as `Commodity:pct` pairs, e.g. `Wheat:1,…,Tomato:20`; unlisted commodities use the default (3). Rough planning figures for the sell/hold suggestion, not measurements (§5.15) |
@@ -1476,7 +1518,7 @@ npm run dev    # http://localhost:3000
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
 | Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
-| Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms |
+| Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms. The crop selector is capped at five crops app-wide (Rice, Wheat, Onion, Sugarcane, Potato, §5.16); Sugarcane has no real mandi data anywhere (mills buy it directly, not via APMC auctions) and honestly says so instead of faking a number |
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
 | Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
 | Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
