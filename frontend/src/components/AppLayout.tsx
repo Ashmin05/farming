@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  Sprout, LayoutDashboard, Map, Satellite,
+  Sprout, LayoutDashboard, Map, Satellite, IndianRupee,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
   UserCircle
 } from "lucide-react";
@@ -15,6 +15,7 @@ const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
+  { href: "/market", icon: IndianRupee, label: "Mandi Prices" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
   { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
@@ -98,7 +99,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       )}
 
       {/* ── Main area ── */}
-      <div className="flex-1 flex flex-col min-h-screen lg:ml-60">
+      {/* min-w-0: lets wide content (e.g. a table in an overflow-x-auto box)
+          scroll inside its own box instead of stretching the page on phones. */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-screen lg:ml-60">
         {/* Topbar */}
         <header className="h-16 bg-white/90 backdrop-blur-sm border-b border-farm-border-color flex items-center px-4 sm:px-6 gap-4 sticky top-0 z-20">
           <button
@@ -127,7 +130,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

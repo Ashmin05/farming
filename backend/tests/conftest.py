@@ -84,3 +84,4 @@ def stress_zone_repository(session: AsyncSession) -> StressZoneRepository:
 @pytest.fixture
 def environment_snapshot_repository(session: AsyncSession) -> EnvironmentSnapshotRepository:
     return EnvironmentSnapshotRepository(session)
+

@@ -13,7 +13,7 @@
 // 3. Real farms: satellite alerts strip with mark-as-read (/alerts).
 //    Guests: the demo weather/advisory banner.
 // 4. Smart Suggestion + Harvest Estimation side by side.
-// 5. Live Mandi Price & Agri News, then Quick Tools.
+// 5. Mandi Price Pulse (real prices for the farm's crop) & sample agri news, then Quick Tools.
 // ==============================================================================
 
 import { useState } from "react";
@@ -25,6 +25,7 @@ import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
 import SourceBadge, { LiveSource } from "@/components/SourceBadge";
 import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
 import AlertsStrip from "@/components/dashboard/AlertsStrip";
+import MandiPulseCard from "@/components/dashboard/MandiPulseCard";
 import FarmsLoadError from "@/components/FarmsLoadError";
 import {
   Satellite, Droplets, TrendingUp, AlertTriangle,
@@ -427,32 +428,25 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Live Mandi Price & Agri News ── */}
+        {/* ── Mandi Price Pulse & Agri News ── */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold uppercase tracking-wider text-farm-dark flex items-center gap-2">
               <Newspaper className="w-4 h-4 text-farm-green" />
-              Live Mandi Price Pulse & Agri News
+              Mandi Price Pulse & Agri News
             </h2>
-            <span className="text-xs text-farm-muted">Updated today from APMC records</span>
+            <span className="text-xs text-farm-muted">Prices from Agmarknet · news items are samples</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
-              <span className="text-[10px] uppercase font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
-                Mandi Price Alert
-              </span>
-              <h3 className="font-bold text-xs text-farm-dark mt-2">
-                Nashik Onion Mandi: Model price holds steady at ₹2,400/Qtl
-              </h3>
-              <p className="text-[11px] text-farm-muted mt-1 leading-relaxed">
-                Wholesale arrivals at Lasalgaon APMC average 18,000 quintals daily with sustained export demand.
-              </p>
-            </div>
+            <MandiPulseCard farmId={currentFarm?.id} />
 
             <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
               <span className="text-[10px] uppercase font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded">
                 Wheat Procurement
+              </span>
+              <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                Sample
               </span>
               <h3 className="font-bold text-xs text-farm-dark mt-2">
                 Central Wheat MSP set at ₹2,275/Qtl for 2026 rabi season
@@ -465,6 +459,9 @@ export default function DashboardPage() {
             <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
               <span className="text-[10px] uppercase font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
                 Soil Scheme
+              </span>
+              <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                Sample
               </span>
               <h3 className="font-bold text-xs text-farm-dark mt-2">
                 Free Soil Health Card testing drive active in Maharashtra talukas

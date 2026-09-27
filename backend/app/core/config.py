@@ -53,6 +53,49 @@ class Settings(BaseSettings):
     GEE_SERVICE_ACCOUNT_EMAIL: str | None = None
     GEE_KEY_PATH: str | None = None
 
+    # ---- Mandi prices (app/integrations/market_prices/) ----
+    # Agmarknet 2.0 is public and needs no key. The other two are optional:
+    # CEDA Agri Market API (https://api.ceda.ashoka.edu.in/documentation/) --
+    # archive of the old Agmarknet portal, used as a historical fallback.
+    CEDA_API_KEY: str | None = None
+    # data.gov.in Open Government Data API key (free: sign up at
+    # https://data.gov.in, then "My Account" -> API key). Current day only.
+    DATA_GOV_IN_API_KEY: str | None = None
+    # Providers to try, in order, comma-separated. A provider without its key
+    # is skipped.
+    MARKET_PRICE_PROVIDERS: str = "agmarknet,ceda,data_gov_in"
+    # What the nightly job keeps fresh (comma-separated Agmarknet names), plus
+    # every farm's state x crop when MARKET_PRICE_INCLUDE_FARM_CROPS is true.
+    MARKET_PRICE_STATES: str = "West Bengal"
+    MARKET_PRICE_COMMODITIES: str = "Potato,Rice,Paddy(Common),Wheat,Tomato,Onion"
+    MARKET_PRICE_INCLUDE_FARM_CROPS: bool = True
+    # Days re-fetched each night (late and revised reports get picked up).
+    MARKET_PRICE_CURRENT_DAYS: int = 10
+    # Where trained price-forecast models are written (gitignored). Relative
+    # paths are resolved against backend/.
+    PRICE_MODEL_DIR: str = "models_store"
+
+    @property
+    def price_model_dir(self) -> Path:
+        path = Path(self.PRICE_MODEL_DIR)
+        return path if path.is_absolute() else ROOT_DIR / "backend" / path
+
+    @property
+    def market_price_provider_order(self) -> list[str]:
+        return _csv(self.MARKET_PRICE_PROVIDERS)
+
+    @property
+    def market_price_states(self) -> list[str]:
+        return _csv(self.MARKET_PRICE_STATES)
+
+    @property
+    def market_price_commodities(self) -> list[str]:
+        return _csv(self.MARKET_PRICE_COMMODITIES)
+
+
+def _csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

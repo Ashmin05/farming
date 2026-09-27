@@ -29,7 +29,9 @@ future geospatial work on field boundaries).
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
 `satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`,
-`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`) were used during buildout
+`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`, `mandi-prices`, and the
+market-price stack `feat/price-data-provider` → `feat/price-ingestion` → `feat/price-history-backfill` →
+`feat/price-analytics` → `feat/price-forecast-model` → `feat/price-api` → `feat/price-frontend`) were used during buildout
 and have all been merged into `main`, which is
 what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
@@ -78,6 +80,21 @@ what's pushed to origin and described by this document. Notable merged work, rou
   misleading "No farms yet", nightly jobs that no longer skip every later farm after one DB
   error, Earth Engine errors as clean 503s, real error states for failed layers/timeseries, and
   no more duplicate first analyses (§5.13).
+- `mandi-prices` — a first, data.gov.in-only mandi price sync into a flat `mandi_prices` table.
+  Never released: superseded by the market price stack below before being merged.
+- Market price intelligence (§5.14), built as seven stacked branches, each on top of the last:
+  - `feat/price-data-provider`: a provider layer over Agmarknet 2.0 (primary, verified live), CEDA and
+    data.gov.in, with the verified API write-up in `docs/market-price-api.md`.
+  - `feat/price-ingestion`: a normalised catalogue + `market_prices` schema and an idempotent
+    validate → dedupe → resolve → upsert pipeline, run by a nightly job.
+  - `feat/price-history-backfill`: resumable month-by-month historical import. West Bengal
+    2021–2026 is loaded: 456k records.
+  - `feat/price-analytics`: precomputed daily series and per-market stats, a data-quality report,
+    and nearby mandis with opt-in OSM geocoding.
+  - `feat/price-forecast-model`: 7/14/30-day forecasting with baselines vs ML, chronological
+    validation, prediction intervals, and a model registry.
+  - `feat/price-api`: the `/market-prices/*` endpoints.
+  - `feat/price-frontend`: the `/market` page, plus a real mandi card on the Dashboard.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -91,8 +108,8 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - Tailwind CSS + shadcn/ui components (`@base-ui/react`, `class-variance-authority`)
 - Mapbox GL + `@mapbox/mapbox-gl-draw` + `@turf/turf` — interactive satellite maps, field boundary drawing, area calculations
 - `@tanstack/react-query` — server-state caching: the real satellite/environment/alerts hooks
-  (§5.12) plus the (still mock) generic data hooks
-- `recharts` — the NDVI season-curve chart (`components/charts/SeasonCurveChart.tsx`, §5.12)
+  (§5.12), the mandi price hooks (§5.14) plus the (still mock) generic data hooks
+- `recharts` — the NDVI season-curve chart (§5.12) and the mandi price trend / forecast charts (§5.14)
 - `lucide-react` — icons
 
 **Backend**
@@ -107,7 +124,12 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - `shapely` + `pyproj` — validates farm polygons and computes area/centroid using a locally
   centered equal-area projection (not raw lat/lng math) — see §5.4
 - `earthengine-api` — the official Google Earth Engine Python SDK (§5.5)
+- `tenacity` — retries with exponential backoff for the mandi price providers (§5.14)
+- `numpy`, `pandas`, `scikit-learn`, `lightgbm`, `joblib` — mandi price forecasting: dataset
+  building, models, stored model artifacts (§5.14)
 - `pytest` + `pytest-asyncio` + `aiosqlite` — async test suite against an in-memory SQLite DB
+- `respx` — mocks `httpx` requests in tests, replaying trimmed copies of real Agmarknet/CEDA
+  responses (§5.14)
 
 **Database**
 - PostgreSQL 17 with the **PostGIS** extension enabled — farms are stored with a `JSON`/`JSONB`
@@ -132,6 +154,7 @@ per the project's own convention (documented in each `page.tsx`).
 | My Farms | `/farms` | `FarmsPage.tsx` |
 | Farm detail / Field detail | `/farms/[farmId]`, `/farms/[farmId]/fields/[fieldId]` | (in `src/app/farms/...`) |
 | Satellite Analysis | `/satellite` | `SatellitePage.tsx` |
+| Mandi Prices | `/market` | `MarketPage.tsx`: real mandi prices, trends, nearby mandis, forecasts (§5.14) |
 | Weather & Alerts | `/weather` | `WeatherPage.tsx` — still exists, but no longer linked from the sidebar (removed as a redundant nav item; still reachable by direct URL) |
 | KrishiBot AI chat | `/ai-chat` | `AiChatPage.tsx` — now requires sign-in (§6.8) |
 | Profile | `/profile` | `ProfilePage.tsx` |
@@ -139,7 +162,7 @@ per the project's own convention (documented in each `page.tsx`).
 | Help Center | `/help` | `HelpPage.tsx` |
 
 `AppLayout.tsx` provides the shared sidebar/nav shell for the logged-in app pages (Dashboard,
-Farms, Satellite, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
+Farms, Satellite, Mandi Prices, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
 above). Login/Register/Home are standalone, full-page layouts using the public `Navbar.tsx`
 (Home) or their own minimal header (Login/Register) — Login/Register also have their own
 glassmorphism background (§4.4).
@@ -237,7 +260,12 @@ backend/
 │   │   ├── geometry.py    # farm polygon validation + area/centroid math (shapely + pyproj)
 │   │   └── satellite_health.py  # health-score math + generic benchmark curve, EE-free (§5.6)
 │   ├── ml/
-│   │   └── crop_benchmarks.py  # per-crop NDVI-by-growth-stage reference curves (§5.9)
+│   │   ├── crop_benchmarks.py  # per-crop NDVI-by-growth-stage reference curves (§5.9)
+│   │   └── price_forecast/     # mandi price forecasting (§5.14)
+│   │       ├── dataset.py      #   leakage-safe features + targets per market x day
+│   │       ├── models.py       #   baselines (naive/MA/seasonal) + ridge/RF/LightGBM(+Huber)
+│   │       ├── evaluate.py     #   rolling-origin validation, selection, prediction intervals
+│   │       └── service.py      #   train + store models, generate stored forecasts
 │   ├── models/
 │   │   ├── base.py        # declarative Base (Alembic autogenerate target)
 │   │   ├── user.py        # User ORM model
@@ -247,14 +275,18 @@ backend/
 │   │   ├── farm_alert.py  # FarmAlert ORM model (§5.9)
 │   │   ├── satellite_layer_set.py  # SatelliteLayerSet ORM model — cached tile URLs (§5.10)
 │   │   ├── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
-│   │   └── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
+│   │   ├── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
+│   │   └── market_price.py  # mandi catalogue (states/districts/markets/commodities/varieties/grades),
+│   │                        # market_prices, daily series, stats, ingestion runs, quality issues,
+│   │                        # backfill jobs/tasks, forecast models + forecasts (§5.14)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
 │   │   ├── farm.py        # pydantic request/response models for /farms
 │   │   ├── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
 │   │   ├── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
 │   │   ├── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
-│   │   └── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
+│   │   ├── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
+│   │   └── market_prices.py  # pydantic response models for /market-prices/* (§5.14)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
 │   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
@@ -263,31 +295,49 @@ backend/
 │   │   ├── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
 │   │   ├── satellite_layer_repository.py  # DB queries for SatelliteLayerSet, incl. upsert (§5.10)
 │   │   ├── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
-│   │   └── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
+│   │   ├── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
+│   │   └── market_price_repository.py  # price bulk insert/update, ingestion runs, quality issue log (§5.14)
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
+│   │   ├── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
+│   │   └── market_prices/       # mandi price providers behind one interface (§5.14)
+│   │       ├── base.py          #   PriceDataProvider, NormalizedMarketPrice, catalogue types
+│   │       ├── agmarknet.py     #   Agmarknet 2.0 (primary)
+│   │       ├── ceda.py          #   CEDA Agri Market API (archive to 2025-10-30)
+│   │       ├── data_gov.py      #   data.gov.in (optional, latest day only)
+│   │       ├── http.py, text.py #   retries/timeouts; parsing + name matching helpers
+│   │       └── registry.py      #   configured providers in fallback order
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
-│   │   └── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
+│   │   ├── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
+│   │   └── market_prices/       # mandi price pipeline (§5.14): validation, catalog (sync +
+│   │                            # resolver), ingestion, backfill, analytics, quality, nearby,
+│   │                            # watchlist, queries (API read side)
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
 │   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
-│   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   │   ├── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   │   └── market_prices.py  # GET /market-prices/*, GET /farms/{id}/market-prices (§5.14)
 │   ├── jobs/
-│   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11)
+│   │   ├── scheduler.py   # APScheduler jobs: timeseries+alerts (§5.9), environment (§5.11), mandi prices (§5.14)
+│   │   └── market_prices.py  # mandi price ingestion / catalogue / training / forecast jobs (§5.14)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 132 tests
+├── scripts/                 # manual triggers for the mandi price jobs (§5.14): sync_market_catalog,
+│                            # ingest_market_prices, backfill_market_prices, market_price_report,
+│                            # geocode_markets, train_price_models
+├── models_store/            # trained price models (gitignored, PRICE_MODEL_DIR)
+└── tests/                   # pytest suite (async, in-memory SQLite): 242 tests
+    └── fixtures/market_prices/  # trimmed copies of real Agmarknet/CEDA responses
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
 → **repositories** (DB queries) → **models** (ORM). `schemas/` are the pydantic request/response
 shapes, kept separate from the ORM models. `integrations/` wraps external services (Google auth,
-Earth Engine) behind a small interface the rest of the app depends on.
+Earth Engine, the mandi price sources) behind a small interface the rest of the app depends on.
 
 ### 5.2 API surface today
 
@@ -313,6 +363,16 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 | GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
 | GET | `/farms/{farm_id}/environment` | Cache-only read of rainfall (CHIRPS)/land-surface temperature (MODIS)/soil moisture (SMAP, regional), refreshed nightly, plus soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution; 404 if no report yet (§5.11) |
+| GET | `/market-prices/commodities`, `/locations`, `/markets` | Mandi catalogue with stored prices: commodities, states + districts, markets (with coordinates if known) (§5.14) |
+| GET | `/market-prices/latest?commodity=&state=&district=` | Each market's latest price with its precomputed analytics + `provenance` {sources, as_of, is_stale, last ingestion run} (§5.14) |
+| GET | `/market-prices?commodity=&from=&to=&page=` | Individual stored reports (variety/grade level), paginated (§5.14) |
+| GET | `/market-prices/history?market_id=&commodity=&from=&to=` | Daily modal/min/max/arrivals series for one market (default 180 days, max 3 years) (§5.14) |
+| GET | `/market-prices/nearby?commodity=&lat=&lon=&radius_km=&state=&district=` | Markets by distance (where coordinates are known), then same district, then same state; only markets that reported in the last 30 days (§5.14) |
+| GET | `/market-prices/trends?commodity=&state=` | Trend counts, median changes, top gainers/decliners across fresh markets (§5.14) |
+| GET | `/market-prices/analytics?market_id=&commodity=` | One market's stats + a deterministic outlook (§5.14) |
+| GET | `/market-prices/forecast?market_id=&commodity=&horizon=` | Stored 7/14/30-day estimates with expected range, model + validation metrics, or the reason there's none (§5.14) |
+| GET | `/market-prices/quality?days=` | Data-quality report (§5.14) |
+| GET | `/farms/{farm_id}/market-prices` | The farm's crop mapped to mandi commodities + nearby markets from its centre point; 404 if not yours (§5.14) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -770,6 +830,218 @@ page showed the load error, and Try again recovered once the backend was back. R
 against a new farm's background analysis stored exactly one analysis (the temp farm was then
 deleted).
 
+### 5.14 Mandi price intelligence (`feat/price-*` branches)
+
+Real mandi (APMC market) prices, analytics and forecasts. The pipeline runs end to end:
+
+source → ingestion → normalisation → validation → PostgreSQL → history → analytics → forecasting → FastAPI → `/market`
+
+Rules the module keeps:
+- **Real data only.** Every price shown was reported by a mandi.
+- **The browser only talks to FasalSetu's backend.** It never calls Agmarknet, and no API key is in the frontend.
+- **Nothing is computed per request.** Scheduled jobs fill precomputed tables and the API reads them.
+- **Forecasts are always labelled estimates**, with the error they showed in testing.
+
+It replaced a first data.gov.in-only version (`mandi-prices`, never merged). data.gov.in's gateway
+returned 502/504 throughout development, so it's now just an optional provider.
+
+**Sources (verified live on 2026-09-27; full write-up in `docs/market-price-api.md`)**
+
+| Provider | Role | Notes |
+|---|---|---|
+| Agmarknet 2.0 (`api.agmarknet.gov.in/v1/`) | Primary | No key. `daily-price-arrival/filters` = the whole catalogue in one request; `prices-and-arrivals/date-wise/specific-commodity` = every market's daily prices + arrivals for one state × commodity × month, from Jan 2021. nginx 403s generic library User-Agents, so requests identify as `FasalSetu/0.1 (...)` — honest, not a browser disguise. The CAPTCHA-protected report and login-only endpoints are deliberately not used. |
+| CEDA Agri Market API | Fallback / archive | `CEDA_API_KEY` bearer auth, 40 requests/hour, data ends 2025-10-30 (archive of the old portal). Its ids differ from Agmarknet 2.0's, so everything is matched by name. Used automatically for months Agmarknet 2.0 doesn't have (before 2021). |
+| data.gov.in | Optional | Latest day only; unreliable gateway. |
+
+**Pipeline** (`app/integrations/market_prices/`, `app/services/market_prices/`)
+1. **Providers → `NormalizedMarketPrice`.** Values are only cleaned (whitespace, number and date
+   formats), never changed in meaning:
+   - prices are `Decimal` in Rs/quintal, arrivals in tonnes
+   - units are read from the source's column titles, not assumed
+   - anything unreadable becomes `None` plus a recorded reason
+2. **Validation** (`validation.py`) never "fixes" a record.
+   - *Reject* (the row goes to `price_quality_issues` with its raw source row): missing or zero
+     modal price, negative values, bad or future date, unexpected unit, missing market/commodity.
+   - *Flag* (stored as reported, with `quality_flags`): min > max, modal outside [min, max],
+     missing min/max, a market not in the catalogue.
+3. **In-batch dedupe** by `(source, source_record_id)`: exact duplicates are skipped; conflicting
+   ones are rejected, keeping the first. Agmarknet can list the same variety twice for one
+   market/day. These are separate lots, since their arrivals add up to the day's total, so each
+   keeps its own record (numbered in report order).
+4. **Catalogue resolution** (`catalog.py`): Agmarknet ids first, then names within the right
+   parent (case/punctuation/"APMC"-suffix-insensitive, plus known aliases such as
+   "Paddy(Dhan)(Common)" = "Paddy(Common)").
+   - An ambiguous name is rejected, never guessed. The catalogue has same-named markets in
+     different districts.
+   - Unknown states and commodities are rejected.
+   - An unknown market, variety or grade reported by a source is created and flagged.
+5. **Upsert**: new rows are inserted, changed rows updated, unchanged rows skipped. The key is
+   `(source, source_record_id)`, so **ingestion is idempotent**. Verified live: a second run of
+   the same fetch inserted 0 and skipped 3,115.
+6. Each run is logged in `price_ingestion_runs`: fetched, inserted, updated, skipped, rejected,
+   flagged, requests made, duration and errors, with a per-query breakdown. If one provider
+   errors, the next one in `MARKET_PRICE_PROVIDERS` is tried.
+
+**Schema**: `states`, `districts`, `markets` (lat/lon + `coordinate_source`/`coordinate_precision`),
+`commodities`, `varieties`, `grades`, `market_prices` (Numeric money, arrivals, units, source, flags;
+indexes on market, commodity, date, market+commodity+date, commodity+date, state+commodity+date),
+`market_price_daily`, `market_price_stats`, `price_ingestion_runs`, `price_quality_issues`,
+`price_backfill_jobs/tasks`, `price_forecast_models`, `price_forecasts`. The farm tables are
+untouched. Farm `state`/`district` strings are mapped onto the catalogue by name.
+
+**Jobs**:
+- **23:00 nightly ingestion.** Re-fetches the last 10 days for `MARKET_PRICE_STATES` ×
+  `MARKET_PRICE_COMMODITIES`, plus every farm's state × crop. Crop → commodity:
+  Rice → Paddy(Common), Rice; Soybean → Soyabean; Chilli → Green/Dry Chillies.
+- **23:45 forecasts.**
+- **Saturday 03:00 model retraining.**
+- **Sunday 22:00 catalogue refresh.**
+- **Backfill** (`backfill.py`, `scripts/backfill_market_prices.py`): a job is split into one task
+  per state × commodity × month (one request each) and committed per task. An interrupted job
+  resumes where it stopped; failed tasks keep their error and are retried up to 3 times; jobs over
+  2,000 requests are refused. **Loaded: West Bengal, Jan 2021 → today**:
+  - 6 commodities (Potato, Tomato, Onion, Rice, Wheat, Paddy)
+  - 414/414 tasks succeeded
+  - **456,681 reports**
+
+**Analytics** (`analytics.py`, refreshed after each ingestion for just the commodities and dates it touched):
+- `market_price_daily`: one price per market × commodity × day. The day's reports are combined
+  into an **arrival-weighted modal** (a plain mean if any report lacks arrivals). Min/max are the
+  day's extremes. When sources overlap, the primary wins.
+- `market_price_stats` per market (modal price is the primary metric):
+  - current modal/min/max/arrivals
+  - 7/14/30-day averages, 7-day and 30-day min/max
+  - 7/30-day % change. The reference is the latest price within a grace window; a zero or missing
+    reference gives `null`, never a division by zero.
+  - 30-day volatility (standard deviation of daily % changes)
+  - trading days
+  - trend: last 7 days' mean vs the previous 7 days'. ±2.5% counts as stable; fewer than 3 trading
+    days in either week is "insufficient data".
+- **Data-quality report** (`quality.py`, `GET /market-prices/quality`,
+  `scripts/market_price_report.py --quality`): issues by code, flags, cross-source overlaps,
+  abnormal day-over-day moves (> 50%), date gaps (> 7 days), stale markets, recent runs.
+  On the real data it surfaces what you'd expect:
+  - variety-mix jumps in Rice
+  - long seasonal gaps (tomato/rice off-season)
+  - one ambiguous market ("Bishnupur APMC" vs the catalogue's "Bishnupur(Bankura) APMC"): kept
+    separate and flagged, never merged by guess
+
+**Nearby mandis** (`nearby.py`): no source publishes market coordinates.
+- `scripts/geocode_markets.py` (opt-in) fills them from OpenStreetMap Nominatim, at ≤1 request/s
+  with an identifying User-Agent.
+- Each point records its source and precision: `place` = town found, `district` = only the
+  district centroid, shown as "~".
+- Markets it can't place stay without coordinates. West Bengal: 53 place, 21 district, 2 not
+  found (Agmarknet spells a district "Sounth 24 Parganas").
+- Ranking: distance where known, then same district, then same state.
+- Only markets that reported in the last 30 days are listed.
+- OSM attribution is shown with any distance.
+- It's a comparison. The UI says the highest price isn't necessarily the best market.
+
+**Forecasting** (`app/ml/price_forecast/`):
+- **Dataset.** One sample per market × traded day. Features:
+  - calendar and season (Kharif/Rabi/Zaid)
+  - lags 1/3/7/14/30
+  - rolling mean/std 7/14/30
+  - price range, 7/30-day change
+  - arrivals, their 7-day lag and 7/30-day means
+  - last year's move over the same stretch
+  - market/district ids
+
+  Everything is computed from data up to the origin day. A test alters every future price and
+  checks that past features are bit-for-bit unchanged. The target is the log price ratio at t+h
+  (the latest report within 3 days of t+h), so one model can pool markets with different price
+  levels. Varieties are merged in the daily series; the per-variety split is a known next step.
+- **Candidates**: naive (no change), 7-day moving average, seasonal naive (baselines); Ridge,
+  random forest, LightGBM, and LightGBM with Huber loss (learned). No LSTM/GRU: with a few years
+  of daily data per market, tree and linear models are the right tools, and validation decides.
+  Predicted moves are capped at ×0.22–×4.5, the same in validation and in production.
+- **Validation**: rolling-origin, never shuffled.
+  - 4 folds × 30 days; each trains only on samples whose *target* date is before the fold (purged).
+  - MAE / RMSE / MAPE are pooled, per fold and per market. Modal prices are strictly positive, so
+    MAPE is well-defined.
+  - A learned model is selected only if it beats the best baseline.
+  - 80% prediction intervals come from the chosen model's validation-error quantiles. Coverage is
+    checked honestly: quantiles from earlier folds, measured on the last fold.
+- **Storage**: artifacts go in `PRICE_MODEL_DIR/<commodity>/<state>/<h>d/<version>/`
+  (`model.pkl`, `metadata.json`, `metrics.json`), which is gitignored. The registry
+  `price_forecast_models` records model, version, training dates and data range, features, every
+  candidate's metrics, and the interval. `price_forecasts` records base date/price, forecast date,
+  horizon, predicted price, bounds, and model name/version. A market gets no forecast if it's
+  stale (> 10 days behind) or thin (< 15 trading days in 60). The API then says why.
+
+**Real results, West Bengal (validation, Rs/quintal)**
+
+| Commodity | Horizon | Selected | MAE | MAPE | Naive MAE | Best learned (MAE) | 80% interval held (last fold) |
+|---|---|---|---|---|---|---|---|
+| Onion | 7d | Ridge | 235.8 | 7.4% | 238.3 | Ridge 235.8 | 91% |
+| Onion | 14d | Ridge | 363.5 | 11.2% | 404.2 | Ridge 363.5 | 89% |
+| Onion | 30d | Ridge | 617.2 | 18.1% | 761.3 | Ridge 617.2 (−17% vs best baseline) | 76% |
+| Tomato | 7d | naive | 328.8 | 9.6% | 328.8 | LightGBM-Huber 345.6 | 88% |
+| Tomato | 14d | naive | 477.6 | 13.9% | 477.6 | LightGBM-Huber 490.9 | 93% |
+| Tomato | 30d | LightGBM-Huber | 660.1 | 20.2% | 692.8 | LightGBM-Huber 660.1 | 96% |
+| Potato | 7 / 14 / 30d | naive | 20.6 / 34.8 / 62.7 | 2.7 / 4.6 / 8.4% | same | LightGBM-Huber 22.3 / 36.6 / 63.5 | 89 / 90 / 93% |
+| Rice | 7 / 14 / 30d | naive | 33.6 / 50.5 / 82.8 | 0.8 / 1.3 / 2.1% | same | RF 35.4 / LGBM-H 54.8 / 91.1 | 79 / 68 / 62% |
+| Wheat | 7 / 14 / 30d | naive | 35.3 / 46.4 / 71.2 | 1.3 / 1.7 / 2.6% | same | RF 39.1 / LGBM-H 51.2 / 80.5 | 90 / 91 / 83% |
+| Paddy(Common) | 7 / 14 / 30d | naive / naive / 7-day MA | 13.9 / 20.7 / 28.8 | 0.6 / 0.9 / 1.2% | 13.9 / 20.7 / 29.4 | RF 15.4 / 23.3 / LGBM-H 33.8 | 69 / 62 / 66% |
+
+690 forecasts were generated across 50–69 markets per commodity; stale or thin markets got none.
+
+Reading the table:
+- **Learned models earn their place for Onion** (all horizons) **and for Tomato at 30 days.**
+- **Everywhere else the plain "no change" estimate is the most accurate**, and that is what's served.
+- **The Rice and Paddy intervals under-cover.** They held only 62–79% of the time on the most
+  recent month, not 80%. Their prices had a calmer training history than the latest weeks. Widening
+  them, e.g. with conformal recalibration on recent folds, is in §10.
+
+Two findings shaped the model set:
+- **Squared-error models lost to "no change" at short horizons.** Mandi modal prices are sticky
+  (20–28% of 7-day changes are exactly zero) with occasional jumps. The median change is 0, which
+  is what naive predicts. That led to adding the Huber-loss LightGBM.
+- **A linear model once extrapolated to an infinite price on tomato.** That led to the prediction
+  cap and finite-only metrics.
+
+Where a baseline wins, the UI says so plainly: "none beat the naive (last price) baseline, so that
+is what this estimate uses". It never implies ML was used when it wasn't.
+
+**API** — see §5.2.
+- Unknown names → 404, ambiguous names → 422.
+- Every price response carries `provenance` {sources, as_of, is_stale, last ingestion run}.
+- The outlook (`/analytics`) is deterministic and built from the stored numbers. Example:
+  "Potato prices at X have decreased 12.3% over the last 30 days. The 7-day forecast estimates
+  prices to remain relatively stable (estimate, not guaranteed). Among nearby markets, Bolpur APMC
+  (76 km away) currently has the highest modal price (₹1,000/quintal on 27 Sep 2026)."
+  No LLM is involved and nothing is hard-coded.
+
+**Frontend** (`/market`, `views/MarketPage.tsx`, `components/market/*`):
+- **Filters:** crop / state / district / market / period. They default to the signed-in user's
+  first farm, via `GET /farms/{id}/market-prices`.
+- **Current price card:** modal, min, max and last updated, with a warning when the price is more
+  than 7 days old.
+- **Recharts trend chart:** the modal line with the day's min–max band.
+- **Summary:** averages and changes, plus a trend pill with an icon and text, never colour alone.
+- **Outlook.**
+- **Sortable nearby-mandi table:** by distance, price or 7-day change.
+- **Forecast panel:** 7/14/30-day tabs. The chart shows history solid, the estimate dashed and the
+  expected range shaded, on a real time axis. The panel lists:
+  - estimated price, expected range, typical error
+  - the model and its training period
+  - validation MAE vs the no-change baseline
+  - last model update and a disclaimer
+
+Loading, empty, error, stale and "forecast unavailable" states are handled throughout. The
+Dashboard's hard-coded "Nashik Onion Mandi ₹2,400" card is replaced by `MandiPulseCard`, which
+shows the real price for the farm's crop, or a sign-in prompt for demo farms.
+
+**Tests** (110 new, 242 in the suite, all against in-memory SQLite + respx; fixtures are trimmed
+copies of real Agmarknet/CEDA responses):
+- providers: 29
+- ingestion/validation/resolution: 31
+- backfill: 11
+- analytics/quality/nearby: 16
+- forecasting: 12
+- API: 11
+
 ---
 
 ## 6. Authentication system (the main feature built so far)
@@ -971,6 +1243,12 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `DATABASE_URL` | Backend | Async SQLAlchemy/Postgres connection string (`postgresql+asyncpg://...`) |
 | `FRONTEND_ORIGIN` | Backend | Sole allowed CORS origin |
 | `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | Backend | Reserved for future `app/integrations/` clients — unused today |
+| `CEDA_API_KEY` | Backend | CEDA Agri Market API bearer key (§5.14). Optional: historical fallback archive to 2025-10-30, 40 requests/hour. Backend only, never in `frontend/.env` |
+| `DATA_GOV_IN_API_KEY` | Backend | data.gov.in API key (§5.14). Optional, latest day only; free at https://data.gov.in |
+| `MARKET_PRICE_PROVIDERS` | Backend | Provider fallback order, default `agmarknet,ceda,data_gov_in`. Agmarknet 2.0 needs no key; providers without a key are skipped |
+| `MARKET_PRICE_STATES` / `MARKET_PRICE_COMMODITIES` | Backend | What the nightly job keeps fresh (comma-separated Agmarknet names). Default `West Bengal` × `Potato,Rice,Paddy(Common),Wheat,Tomato,Onion`. Every farm's state × crop is added when `MARKET_PRICE_INCLUDE_FARM_CROPS` is true (default) |
+| `MARKET_PRICE_CURRENT_DAYS` | Backend | Days re-fetched each night (default 10: late/revised reports are picked up; the upsert makes the overlap free) |
+| `PRICE_MODEL_DIR` | Backend | Where trained forecast models are written (default `backend/models_store`, gitignored) |
 | `JWT_SECRET_KEY` | Backend | Signs JWTs — **must** be overridden outside local dev |
 | `JWT_ALGORITHM` | Backend | Default `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Backend | Default `30` |
@@ -1007,17 +1285,37 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 132 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 242 tests, async, in-memory SQLite — no Postgres, Earth Engine or price APIs needed (mocked)
 ```
 
-**Nightly jobs (§5.9, §5.11)**: both start automatically with the backend (registered in `main.py`'s
-`lifespan`) — timeseries+alerts at 02:00 server time, environment at 02:30 — inconvenient to wait for
+**Scheduled jobs (§5.9, §5.11, §5.14)**: all start automatically with the backend (registered in `main.py`'s
+`lifespan`). Times are server time:
+- timeseries + alerts at 02:00
+- environment at 02:30
+- mandi price ingestion at 23:00, then forecasts at 23:45
+- forecast model retraining Saturdays at 03:00
+- market catalogue Sundays at 22:00
+
+The mandi jobs have their own manual triggers (below). The rest are inconvenient to wait for
 during local dev. To trigger either immediately instead, run (from `backend/` with the venv active,
 and `earth_engine_client.initialize()` first if running outside the actual FastAPI process):
 ```bash
 python -c "import asyncio; from app.jobs.scheduler import run_nightly_timeseries_refresh; asyncio.run(run_nightly_timeseries_refresh())"
 python -c "import asyncio; from app.jobs.scheduler import run_nightly_environment_refresh; asyncio.run(run_nightly_environment_refresh())"
 ```
+
+**Mandi prices (§5.14)**: Agmarknet 2.0 needs no key. From `backend/` with the venv active, a first
+full setup is:
+```bash
+python scripts/sync_market_catalog.py            # states/districts/markets/commodities (~2 s)
+python scripts/backfill_market_prices.py create --start 2021-01-01 --end 2026-09-27     --state "West Bengal" --commodity Potato --commodity Tomato --run   # resumable; ~3 s per month
+python scripts/market_price_report.py --rebuild  # daily series + stats (runs automatically after jobs)
+python scripts/geocode_markets.py --state "West Bengal"   # optional: distances for nearby mandis
+python scripts/train_price_models.py --forecast  # evaluate/select/store models, write forecasts
+```
+Day to day: `python scripts/ingest_market_prices.py` runs the nightly ingestion now,
+`python scripts/backfill_market_prices.py run --job 1` resumes a backfill, and
+`python scripts/market_price_report.py --quality` prints the data-quality report.
 
 **Frontend**:
 ```bash
@@ -1052,6 +1350,9 @@ npm run dev    # http://localhost:3000
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
 | Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
+| Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms |
+| Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
+| Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
@@ -1074,6 +1375,25 @@ npm run dev    # http://localhost:3000
   `error_code` field) would be cleaner.
 - **Move the refresh-analysis dedupe lock (§5.13) to the database or Redis before running more than
   one backend worker.** Today it's a per-process `asyncio.Lock`.
+- **Recalibrate the Rice/Paddy forecast intervals (§5.14).** They covered 62–79% instead of 80%
+  on the latest month. Conformal recalibration on the most recent folds would fix the width.
+- **Mandi forecasting (§5.14) mostly doesn't beat "no change" at short horizons, and that is the
+  honest result.** Learned models win for Onion and for Tomato at 30 days. Worth trying next:
+  - per-variety series for crops with mixed varieties (Rice)
+  - weather/arrival forecasts as features
+  - quantile models for the intervals
+- **Backfill more states** (only West Bengal has history). Farms' states get current prices
+  nightly, but they need a backfill before forecasts can be trained for them.
+- **Rice's daily series mixes varieties** (fine vs coarse), which causes most of the "abnormal
+  change" rows in the quality report. A dominant-variety series would be cleaner.
+- **Market name ambiguity**: a price reported as "Bishnupur APMC" doesn't match the catalogue's
+  "Bishnupur(Bankura) APMC". It's kept as a separate, flagged market rather than guessed; an alias
+  table could merge such cases after a human check.
+- **District names in farm records vs Agmarknet's** (e.g. "Ahmednagar" vs "Ahilyanagar", and
+  Agmarknet's own "Sounth 24 Parganas" typo). Nearby mandis fall back to distance/state, but the
+  same-district step needs matching names.
+- **The Harvest Estimation card's "Target Mandi Rate"** is still generated demo data; it could
+  now read the farm's real modal price.
 - **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked
   for, but Earth Engine flags it deprecated and it stopped updating around mid-2025; the response
   already surfaces this honestly via `as_of` rather than hiding it, but the underlying collection

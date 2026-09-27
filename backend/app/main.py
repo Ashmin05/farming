@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.integrations.earth_engine_client import earth_engine_client
 from app.jobs.scheduler import start_scheduler, stop_scheduler
-from app.routers import alerts, auth, farms, health, satellite
+from app.routers import alerts, auth, farms, health, market_prices, satellite
 
 
 @asynccontextmanager
@@ -36,3 +36,5 @@ app.include_router(auth.router)
 app.include_router(farms.router)
 app.include_router(satellite.router)
 app.include_router(alerts.router)
+app.include_router(market_prices.router)
+app.include_router(market_prices.farm_router)
