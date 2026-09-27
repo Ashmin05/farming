@@ -6,8 +6,12 @@
 // Route URL: /dashboard
 // Design Principles:
 // 1. Greeting hero + farm selector up top.
-// 2. Four at-a-glance stat cards (NDVI, soil, moisture, weather).
-// 3. One-line weather/advisory banner.
+// 2. Four at-a-glance stat cards (NDVI, soil, moisture, weather). For a
+//    signed-in user's real farm, NDVI/health, soil and moisture come from the
+//    backend (/satellite/latest, /environment) with SourceBadges and
+//    loading/empty/error states; guests keep demo values.
+// 3. Real farms: satellite alerts strip with mark-as-read (/alerts).
+//    Guests: the demo weather/advisory banner.
 // 4. Smart Suggestion + Harvest Estimation side by side.
 // 5. Live Mandi Price & Agri News, then Quick Tools.
 // ==============================================================================
@@ -17,11 +21,15 @@ import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
 import { useFarmStore, useUserStore, applyLiveSatellite } from "@/lib/stores/farmStore";
 import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
+import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
+import SourceBadge, { LiveSource } from "@/components/SourceBadge";
+import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
+import AlertsStrip from "@/components/dashboard/AlertsStrip";
 import {
   Satellite, Droplets, TrendingUp, AlertTriangle,
   ShieldCheck, Thermometer, CheckCircle2,
   ChevronRight, ChevronDown, Sparkles, Brain, Newspaper,
-  Calculator, Sprout, Leaf, BadgeCheck, CloudSun
+  Calculator, Sprout, Leaf, CloudSun, Loader2, MoonStar
 } from "lucide-react";
 
 function useGreeting(): string {
@@ -43,10 +51,21 @@ export default function DashboardPage() {
   const [calcCrop, setCalcCrop] = useState<string>("Onion");
 
   const currentFarm = farms.find((f) => f.id === selectedFarmId) || farms[0];
-  const { observation: satelliteObservation } = useFarmSatelliteAnalysis(currentFarm?.id);
+  const {
+    isRealFarm,
+    status: satelliteStatus,
+    observation: satelliteObservation,
+    error: satelliteError,
+    retry: retrySatellite,
+  } = useFarmSatelliteAnalysis(currentFarm?.id);
+  const { report: environment, isLoading: environmentLoading, isError: environmentError, retry: retryEnvironment } =
+    useFarmEnvironment(currentFarm?.id);
   const currentSatellite = currentFarm && satelliteObservation
     ? applyLiveSatellite(currentFarm.satellite, satelliteObservation)
     : currentFarm?.satellite;
+  const sentinelSource: LiveSource | null = satelliteObservation
+    ? { source: "Sentinel-2", asOf: satelliteObservation.image_date, cloudPct: satelliteObservation.cloud_pct }
+    : null;
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render an empty shell rather than
@@ -118,25 +137,35 @@ export default function DashboardPage() {
           {/* Crop Health (NDVI) */}
           <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-farm-muted flex items-center gap-1">
-                Crop Health (NDVI)
-                {satelliteObservation && (
-                  <span title="Live Sentinel-2 data">
-                    <BadgeCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  </span>
-                )}
-              </span>
+              <span className="text-xs font-medium text-farm-muted">Crop Health (NDVI)</span>
               <span className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
                 <Leaf className="w-4 h-4" />
               </span>
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold text-farm-dark">{currentSatellite!.meanNdvi.toFixed(2)}</span>
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                {currentSatellite!.canopyVigourLabel}
-              </span>
-            </div>
-            <p className="text-xs text-farm-muted mt-2">{currentSatellite!.healthyCanopyPercent}% healthy cover</p>
+            {isRealFarm && !satelliteObservation ? (
+              <SatelliteStatusState compact status={satelliteStatus} error={satelliteError} onRetry={retrySatellite} />
+            ) : (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-extrabold text-farm-dark">{currentSatellite!.meanNdvi.toFixed(2)}</span>
+                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                    {currentSatellite!.canopyVigourLabel}
+                  </span>
+                </div>
+                <p className="text-xs text-farm-muted mt-2">
+                  {satelliteObservation && (
+                    <>
+                      Health score <strong className="text-farm-dark">{satelliteObservation.health_score.toFixed(0)}/100</strong>
+                      {" · "}
+                    </>
+                  )}
+                  {currentSatellite!.healthyCanopyPercent}% healthy cover
+                </p>
+                <div className="mt-2">
+                  {sentinelSource ? <SourceBadge live={sentinelSource} /> : <SourceBadge demo />}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Soil Condition */}
@@ -147,15 +176,64 @@ export default function DashboardPage() {
                 <ShieldCheck className="w-4 h-4" />
               </span>
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold text-farm-dark">pH {currentFarm.soil.ph}</span>
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                {currentFarm.soil.healthRating}
-              </span>
-            </div>
-            <p className="text-xs text-farm-muted mt-2">
-              N: {currentFarm.soil.nitrogen} · P: {currentFarm.soil.phosphorus} · K: {currentFarm.soil.potassium}
-            </p>
+            {isRealFarm ? (
+              environmentLoading ? (
+                <p className="text-xs text-farm-muted flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading soil report…
+                </p>
+              ) : environmentError ? (
+                <p className="text-xs text-red-700">
+                  Couldn&apos;t load the soil report.{" "}
+                  <button onClick={() => retryEnvironment()} className="font-semibold underline">
+                    Retry
+                  </button>
+                </p>
+              ) : environment ? (
+                <>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-extrabold text-farm-dark">
+                      pH {environment.soil.ph !== null ? environment.soil.ph.toFixed(1) : "—"}
+                    </span>
+                    {environment.soil.texture_class && (
+                      <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                        {environment.soil.texture_class}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-farm-muted mt-2">
+                    Organic carbon:{" "}
+                    {environment.soil.organic_carbon_g_per_kg !== null
+                      ? `${environment.soil.organic_carbon_g_per_kg.toFixed(0)} g/kg`
+                      : "—"}
+                  </p>
+                  <div className="mt-2">
+                    <SourceBadge
+                      live={{ label: "Soil map", source: "OpenLandMap", asOf: null, resolution: environment.soil.provenance.resolution }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-farm-muted flex items-start gap-2">
+                  <MoonStar className="w-4 h-4 flex-shrink-0" />
+                  Soil report is generated by the nightly refresh — check back tomorrow.
+                </p>
+              )
+            ) : (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-extrabold text-farm-dark">pH {currentFarm.soil.ph}</span>
+                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                    {currentFarm.soil.healthRating}
+                  </span>
+                </div>
+                <p className="text-xs text-farm-muted mt-2">
+                  N: {currentFarm.soil.nitrogen} · P: {currentFarm.soil.phosphorus} · K: {currentFarm.soil.potassium}
+                </p>
+                <div className="mt-2">
+                  <SourceBadge demo />
+                </div>
+              </>
+            )}
           </div>
 
           {/* Canopy Moisture */}
@@ -166,19 +244,62 @@ export default function DashboardPage() {
                 <Droplets className="w-4 h-4" />
               </span>
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold text-farm-dark">{currentFarm.water.soilMoisturePercent}%</span>
-              <span
-                className={`text-xs font-bold px-2 py-0.5 rounded-md ${
-                  currentFarm.water.status === "Optimal" ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
-                }`}
-              >
-                {currentFarm.water.status}
-              </span>
-            </div>
-            <p className="text-xs text-farm-muted mt-2 truncate" title={currentFarm.water.nextRecommendedAction}>
-              Last watered: {currentFarm.water.lastIrrigationDaysAgo}d ago
-            </p>
+            {isRealFarm ? (
+              satelliteObservation && sentinelSource ? (
+                <>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-extrabold text-farm-dark">
+                      NDWI {satelliteObservation.ndwi.mean.toFixed(2)}
+                    </span>
+                    <span
+                      className={`text-xs font-bold px-2 py-0.5 rounded-md ${
+                        satelliteObservation.ndwi.mean >= 0 ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
+                      }`}
+                    >
+                      {satelliteObservation.ndwi.mean >= 0 ? "Adequate" : "Dry"}
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    <SourceBadge live={sentinelSource} />
+                  </div>
+                  {environment && environment.soil_moisture.surface_moisture !== null && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs text-farm-muted">
+                        Soil moisture {environment.soil_moisture.surface_moisture.toFixed(2)} m³/m³
+                      </p>
+                      <SourceBadge
+                        live={{
+                          source: "SMAP",
+                          asOf: environment.soil_moisture.provenance.as_of,
+                          resolution: environment.soil_moisture.provenance.resolution,
+                        }}
+                      />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-farm-muted">Available once the first satellite analysis finishes.</p>
+              )
+            ) : (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-extrabold text-farm-dark">{currentFarm.water.soilMoisturePercent}%</span>
+                  <span
+                    className={`text-xs font-bold px-2 py-0.5 rounded-md ${
+                      currentFarm.water.status === "Optimal" ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
+                    }`}
+                  >
+                    {currentFarm.water.status}
+                  </span>
+                </div>
+                <p className="text-xs text-farm-muted mt-2 truncate" title={currentFarm.water.nextRecommendedAction}>
+                  Last watered: {currentFarm.water.lastIrrigationDaysAgo}d ago
+                </p>
+                <div className="mt-2">
+                  <SourceBadge demo />
+                </div>
+              </>
+            )}
           </div>
 
           {/* Field Weather */}
@@ -200,8 +321,10 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Weather/Advisory Banner ── */}
-        {primaryAlert ? (
+        {/* ── Satellite alerts (real farms) / demo weather banner (guests) ── */}
+        {isRealFarm ? (
+          <AlertsStrip farmId={currentFarm.id} />
+        ) : primaryAlert ? (
           <div className="rounded-2xl bg-amber-50 border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-start gap-3">
               <span className="w-9 h-9 rounded-xl bg-amber-200/70 text-amber-800 flex items-center justify-center flex-shrink-0">

@@ -56,11 +56,11 @@ function extractErrorMessage(payload: unknown, status: number): string {
   return `Request failed (${status})`;
 }
 
-async function satelliteFetch<T>(farmId: string, path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const accessToken = getAccessToken();
   if (!accessToken) throw new SatelliteApiError("Not signed in.", 401);
 
-  const res = await fetch(`${API_ROOT}/farms/${farmId}/satellite${path}`, {
+  const res = await fetch(`${API_ROOT}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -74,6 +74,17 @@ async function satelliteFetch<T>(farmId: string, path: string, init?: RequestIni
     throw new SatelliteApiError(extractErrorMessage(payload, res.status), res.status);
   }
   return res.json() as Promise<T>;
+}
+
+function satelliteFetch<T>(farmId: string, path: string, init?: RequestInit): Promise<T> {
+  return apiFetch<T>(`/farms/${farmId}/satellite${path}`, init);
+}
+
+/** The backend reports "no scene covers this field" as a 503 with this
+ * message prefix (NoSentinelImageryAvailableError) -- an expected empty
+ * state for a brand-new farm, not a failure worth a retry button. */
+export function isNoImageryError(err: unknown): boolean {
+  return err instanceof SatelliteApiError && err.message.startsWith("No Sentinel-2 imagery");
 }
 
 /**
@@ -137,4 +148,85 @@ export async function getSatelliteLayers(farmId: string, date?: string): Promise
     if (err instanceof SatelliteApiError && err.status === 503) return null;
     throw err;
   }
+}
+
+export interface TimeseriesPoint {
+  id: string;
+  farm_id: string;
+  image_date: string; // ISO date -- one clear Sentinel-2 pass
+  satellite: string;
+  cloud_pct: number;
+  ndvi_mean: number;
+  ndwi_mean: number;
+  evi_mean: number;
+  benchmark_ndvi: number;
+  created_at: string;
+}
+
+/** Cache-only read of every accumulated clear pass, oldest first. Populated
+ * by the backend's nightly job -- an empty list is a normal state. */
+export function getSatelliteTimeseries(farmId: string): Promise<TimeseriesPoint[]> {
+  return satelliteFetch<TimeseriesPoint[]>(farmId, "/timeseries");
+}
+
+export interface EnvironmentProvenance {
+  source: string;
+  resolution: string; // e.g. "~9-11 km regional (SMAP L4)"
+  as_of: string | null;
+}
+
+export interface EnvironmentReport {
+  farm_id: string;
+  rainfall: {
+    mm_7d: number;
+    mm_30d: number;
+    mm_90d: number;
+    mm_since_sowing: number | null;
+    provenance: EnvironmentProvenance;
+  };
+  temperature: {
+    mean_lst_c: number | null;
+    hot_periods_60d: number;
+    provenance: EnvironmentProvenance;
+  };
+  soil_moisture: {
+    surface_moisture: number | null; // m³/m³
+    provenance: EnvironmentProvenance;
+  };
+  soil: {
+    ph: number | null;
+    organic_carbon_g_per_kg: number | null;
+    texture_class: string | null;
+    provenance: EnvironmentProvenance;
+  };
+  generated_at: string;
+}
+
+/** Cache-only read; `null` until the nightly job has produced a report. */
+export async function getEnvironmentReport(farmId: string): Promise<EnvironmentReport | null> {
+  try {
+    return await apiFetch<EnvironmentReport>(`/farms/${farmId}/environment`);
+  } catch (err) {
+    if (err instanceof SatelliteApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export interface FarmAlert {
+  id: string;
+  farm_id: string;
+  alert_type: "ndvi_drop" | "below_benchmark" | "water_stress" | string;
+  severity: "warning" | "critical" | string;
+  message: string;
+  detected_at: string; // ISO date
+  is_read: boolean;
+  created_at: string;
+}
+
+export function getFarmAlerts(farmId: string): Promise<FarmAlert[]> {
+  return apiFetch<FarmAlert[]>(`/farms/${farmId}/alerts`);
+}
+
+export function markAlertRead(alertId: string): Promise<FarmAlert> {
+  return apiFetch<FarmAlert>(`/alerts/${alertId}/read`, { method: "PATCH" });
 }
