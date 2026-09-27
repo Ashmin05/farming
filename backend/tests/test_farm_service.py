@@ -4,6 +4,7 @@ from datetime import date
 import pytest
 
 from app.repositories.user_repository import UserRepository
+from app.schemas.farm import SoilReportIn
 from app.services.farm_service import FarmError, FarmNotFoundError, FarmService
 
 # Roughly a 100m x 100m square near Nashik, Maharashtra — about 1 hectare.
@@ -173,6 +174,60 @@ class TestOwnership:
 
         with pytest.raises(FarmNotFoundError):
             await farm_service.delete_farm(other, farm.id)
+
+
+class TestSoilReport:
+    async def test_no_soil_report_leaves_has_soil_report_false(
+        self, farm_service: FarmService, user_repository: UserRepository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+
+        farm = await _create_farm(farm_service, user)
+
+        assert farm.has_soil_report is False
+        assert farm.soil_report_ph is None
+
+    async def test_soil_report_is_saved_and_authoritative(
+        self, farm_service: FarmService, user_repository: UserRepository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+
+        farm = await farm_service.create_farm(
+            user,
+            name="Lab Tested Field",
+            crop="Wheat",
+            variety=None,
+            sowing_date=date(2026, 6, 10),
+            irrigation_method=None,
+            polygon_geojson=VALID_POLYGON,
+            state="Maharashtra",
+            district="Nashik",
+            address="Dindori Road, Nashik",
+            soil_report=SoilReportIn(ph=6.6, nitrogen="High", phosphorus="Low", potassium="Medium", organic_matter_pct=1.8),
+        )
+
+        assert farm.has_soil_report is True
+        assert farm.soil_report_ph == 6.6
+        assert farm.soil_report_nitrogen == "High"
+        assert farm.soil_report_phosphorus == "Low"
+        assert farm.soil_report_potassium == "Medium"
+        assert farm.soil_report_organic_matter_pct == 1.8
+        assert farm.soil_report_recorded_at is not None
+
+    async def test_update_farm_can_add_a_soil_report_later(
+        self, farm_service: FarmService, user_repository: UserRepository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user)
+        assert farm.has_soil_report is False
+
+        updated = await farm_service.update_farm(
+            user, farm.id, soil_report=SoilReportIn(ph=7.1, nitrogen="Medium")
+        )
+
+        assert updated.has_soil_report is True
+        assert updated.soil_report_ph == 7.1
+        assert updated.soil_report_nitrogen == "Medium"
 
 
 class TestUpdateFarm:

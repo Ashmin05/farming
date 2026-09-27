@@ -37,6 +37,13 @@ class SoilResponse(BaseModel):
     ph: float | None
     organic_carbon_g_per_kg: float | None
     texture_class: str | None
+    # Only ever set when is_lab_report is True -- OpenLandMap has no NPK or
+    # organic-matter-% readings, only a lab test does.
+    nitrogen: str | None = None
+    phosphorus: str | None = None
+    potassium: str | None = None
+    organic_matter_pct: float | None = None
+    is_lab_report: bool = False
     provenance: Provenance
 
 

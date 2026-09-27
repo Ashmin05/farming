@@ -191,6 +191,13 @@ export interface EnvironmentReport {
     ph: number | null;
     organic_carbon_g_per_kg: number | null;
     texture_class: string | null;
+    // Only set when is_lab_report is true -- OpenLandMap has no NPK or
+    // organic-matter-% readings, only a farmer's lab report does.
+    nitrogen: "Low" | "Medium" | "High" | null;
+    phosphorus: "Low" | "Medium" | "High" | null;
+    potassium: "Low" | "Medium" | "High" | null;
+    organic_matter_pct: number | null;
+    is_lab_report: boolean;
     provenance: EnvironmentProvenance;
   };
   generated_at: string;

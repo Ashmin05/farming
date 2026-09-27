@@ -160,14 +160,25 @@ export default function EnvironmentReportCard({
             icon={Layers}
             title="Soil (0–10 cm)"
             badge={
-              <SourceBadge
-                live={{
-                  label: "Soil map",
-                  source: "OpenLandMap",
-                  asOf: null,
-                  resolution: report.soil.provenance.resolution,
-                }}
-              />
+              report.soil.is_lab_report ? (
+                <SourceBadge
+                  live={{
+                    label: "Lab report",
+                    source: "Soil Health Card",
+                    asOf: report.soil.provenance.as_of,
+                    resolution: report.soil.provenance.resolution,
+                  }}
+                />
+              ) : (
+                <SourceBadge
+                  live={{
+                    label: "Soil map",
+                    source: "OpenLandMap",
+                    asOf: null,
+                    resolution: report.soil.provenance.resolution,
+                  }}
+                />
+              )
             }
           >
             <div className="grid grid-cols-3 gap-2">
@@ -182,6 +193,17 @@ export default function EnvironmentReportCard({
               />
               <Stat label="Texture" value={report.soil.texture_class ?? "—"} />
             </div>
+            {report.soil.is_lab_report && (
+              <div className="grid grid-cols-4 gap-2 pt-2 mt-2 border-t border-farm-border-color">
+                <Stat label="Nitrogen (N)" value={report.soil.nitrogen ?? "—"} />
+                <Stat label="Phosphorus (P)" value={report.soil.phosphorus ?? "—"} />
+                <Stat label="Potassium (K)" value={report.soil.potassium ?? "—"} />
+                <Stat
+                  label="Organic matter"
+                  value={report.soil.organic_matter_pct === null ? "—" : `${report.soil.organic_matter_pct}%`}
+                />
+              </div>
+            )}
           </Section>
         </div>
       )}

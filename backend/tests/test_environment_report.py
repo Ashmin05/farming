@@ -1,7 +1,7 @@
 """Tests for SatelliteService.refresh_environment and get_environment against a mocked
 EarthEngineClient and a real in-memory SQLite DB."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,10 +14,13 @@ from app.integrations.earth_engine_client import (
     SoilProperties,
     TemperatureSummary,
 )
+from app.models.environment_snapshot import EnvironmentSnapshot
 from app.repositories.environment_snapshot_repository import EnvironmentSnapshotRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.user_repository import UserRepository
+from app.routers.satellite import _soil_response
+from app.schemas.farm import SoilReportIn
 from app.services.farm_service import FarmService
 from app.services.satellite_service import SatelliteAnalysisError, SatelliteService
 
@@ -54,7 +57,7 @@ async def _user_with_profile(user_repository: UserRepository):
     return await user_repository.update_profile(user, phone="9876543210", state="Maharashtra")
 
 
-async def _create_farm(farm_service: FarmService, user, *, sowing_date=date(2026, 6, 10)):
+async def _create_farm(farm_service: FarmService, user, *, sowing_date=date(2026, 6, 10), soil_report=None):
     return await farm_service.create_farm(
         user,
         name="North Onion Field",
@@ -66,6 +69,7 @@ async def _create_farm(farm_service: FarmService, user, *, sowing_date=date(2026
         state="Maharashtra",
         district="Nashik",
         address="Village road",
+        soil_report=soil_report,
     )
 
 
@@ -164,6 +168,29 @@ class TestEnvironmentReport:
         with pytest.raises(SatelliteAnalysisError):
             await service.refresh_environment(farm)
 
+    async def test_skips_openlandmap_fetch_when_farm_has_a_soil_report(
+        self,
+        satellite_repository: SatelliteRepository,
+        environment_snapshot_repository: EnvironmentSnapshotRepository,
+        farm_service: FarmService,
+        user_repository: UserRepository,
+    ) -> None:
+        """The farmer's lab report is authoritative -- an OpenLandMap
+        estimate would just be overridden in the response anyway (see
+        _soil_response), so it's never worth spending the Earth Engine call."""
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user, soil_report=SoilReportIn(ph=6.5, nitrogen="High"))
+        fake_ee_client = MagicMock()
+        fake_ee_client.get_environment_dynamics = AsyncMock(return_value=_dynamics())
+        fake_ee_client.get_soil_properties = AsyncMock(return_value=_soil())
+        service = _service(satellite_repository, environment_snapshot_repository, fake_ee_client)
+
+        snapshot = await service.refresh_environment(farm)
+
+        fake_ee_client.get_soil_properties.assert_not_called()
+        assert snapshot.soil_fetched_at is None
+        assert snapshot.soil_ph is None
+
     async def test_wraps_not_configured_error_from_soil(
         self,
         satellite_repository: SatelliteRepository,
@@ -230,3 +257,57 @@ class TestGetEnvironment:
         assert result is not None
         assert result.rainfall_7d_mm == 10.0
         assert result.soil_ph == 7.4
+
+
+def _snapshot(**overrides) -> EnvironmentSnapshot:
+    defaults = dict(
+        soil_ph=6.9,
+        soil_organic_carbon_g_per_kg=12.0,
+        soil_texture_class="Clay Loam",
+        soil_fetched_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    defaults.update(overrides)
+    return EnvironmentSnapshot(**defaults)
+
+
+class TestSoilResponseMerge:
+    """_soil_response (app/routers/satellite.py) is what GET /farms/{id}/environment
+    uses to decide, per farm, whether the soil section shows the farmer's own
+    Soil Health Card / lab report or the OpenLandMap estimate."""
+
+    async def test_uses_openlandmap_when_no_soil_report(
+        self, farm_service: FarmService, user_repository: UserRepository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(farm_service, user)
+        snapshot = _snapshot()
+
+        soil = _soil_response(farm, snapshot)
+
+        assert soil.is_lab_report is False
+        assert soil.ph == 6.9
+        assert soil.nitrogen is None
+        assert soil.provenance.source == "OpenLandMap soil layers"
+
+    async def test_lab_report_overrides_openlandmap_ph_and_adds_npk(
+        self, farm_service: FarmService, user_repository: UserRepository
+    ) -> None:
+        user = await _user_with_profile(user_repository)
+        farm = await _create_farm(
+            farm_service,
+            user,
+            soil_report=SoilReportIn(ph=6.5, nitrogen="High", phosphorus="Low", potassium="Medium", organic_matter_pct=2.4),
+        )
+        # Even if an OpenLandMap estimate happens to exist on the snapshot
+        # (e.g. from before the report was added), the lab report wins.
+        snapshot = _snapshot(soil_ph=7.8)
+
+        soil = _soil_response(farm, snapshot)
+
+        assert soil.is_lab_report is True
+        assert soil.ph == 6.5  # the farmer's value, not the snapshot's 7.8
+        assert soil.nitrogen == "High"
+        assert soil.phosphorus == "Low"
+        assert soil.potassium == "Medium"
+        assert soil.organic_matter_pct == 2.4
+        assert soil.provenance.source == "Farmer-submitted Soil Health Card / Lab Test Report"

@@ -12,6 +12,29 @@ const API_ROOT = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/
 
 export class FarmApiError extends Error {}
 
+export type SoilLevel = "Low" | "Medium" | "High";
+
+// A farmer-submitted Soil Health Card / Lab Test Report. When present on a
+// farm, this is the authoritative soil reading -- it takes priority over the
+// backend's OpenLandMap satellite estimate rather than being blended with it
+// (see backend/app/routers/satellite.py's _soil_response).
+export interface SoilReport {
+  ph: number | null;
+  nitrogen: SoilLevel | null;
+  phosphorus: SoilLevel | null;
+  potassium: SoilLevel | null;
+  organic_matter_pct: number | null;
+  recorded_at: string | null;
+}
+
+export interface SoilReportInput {
+  ph?: number | null;
+  nitrogen?: SoilLevel | null;
+  phosphorus?: SoilLevel | null;
+  potassium?: SoilLevel | null;
+  organic_matter_pct?: number | null;
+}
+
 export interface BackendFarm {
   id: string;
   name: string;
@@ -26,6 +49,8 @@ export interface BackendFarm {
   state: string | null;
   district: string | null;
   address: string | null;
+  has_soil_report: boolean;
+  soil_report: SoilReport | null;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +65,9 @@ export interface FarmCreatePayload {
   state?: string | null;
   district?: string | null;
   address?: string | null;
+  // Set only when the farmer ticked "I have a Soil Health Card / Lab Test
+  // Report" and entered values.
+  soil_report?: SoilReportInput | null;
 }
 
 // FastAPI returns `detail` as a plain string for our own HTTPExceptions, but
