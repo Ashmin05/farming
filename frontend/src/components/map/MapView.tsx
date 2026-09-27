@@ -26,6 +26,11 @@ export interface MapViewProps {
   initialCenter?: [number, number]; // [lng, lat]
   initialZoom?: number;
   flyToCenter?: [number, number];  // fly to without re-mounting map
+  /** Fit the view to this polygon's bounding box without re-mounting the map
+   * (e.g. switching between farms on a read-only analysis view) -- shows the
+   * whole registered field, not the surrounding area. Takes precedence over
+   * flyToCenter whenever both are passed. */
+  fitToPolygonGeoJson?: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
   showDrawControls?: boolean;      // false = view-only map, no draw toolbar
   className?: string;
   height?: string | number;
@@ -43,6 +48,7 @@ function MapViewInner({
   initialCenter = [78.9629, 20.5937],
   initialZoom = 4.5,
   flyToCenter,
+  fitToPolygonGeoJson,
   showDrawControls = true,
   className = "",
   height = "500px",
@@ -276,6 +282,36 @@ function MapViewInner({
       map.once("load", fly);
     }
   }, [flyToCenter]);
+
+  // Fit the view to a farm polygon's bounds -- e.g. switching the farm on a
+  // read-only satellite analysis view -- without re-initialising the map.
+  useEffect(() => {
+    if (!fitToPolygonGeoJson || !mapRef.current) return;
+    const map = mapRef.current;
+    const fit = () => {
+      try {
+        if (drawRef.current) {
+          drawRef.current.deleteAll();
+          drawRef.current.add(fitToPolygonGeoJson);
+        }
+        const bbox = turf.bbox(fitToPolygonGeoJson);
+        map.fitBounds(
+          [
+            [bbox[0], bbox[1]],
+            [bbox[2], bbox[3]],
+          ],
+          { padding: 60, maxZoom: 17, duration: 1200 }
+        );
+      } catch (err) {
+        console.warn("Failed to fit map to polygon bounds:", err);
+      }
+    };
+    if (map.isStyleLoaded()) {
+      fit();
+    } else {
+      map.once("load", fit);
+    }
+  }, [fitToPolygonGeoJson]);
 
   // Raster overlay (e.g. an Earth Engine NDVI/NDWI/stress tile layer) —
   // added/replaced without re-mounting the map whenever the tile URL changes.
