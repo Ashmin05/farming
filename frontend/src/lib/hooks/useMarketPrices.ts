@@ -11,8 +11,12 @@ import { isRealFarmId } from "@/lib/hooks/useFarmSatelliteAnalysis";
  */
 const STALE = 5 * 60 * 1000;
 
-export function useMarketCommodities(state?: string) {
-  return useQuery({ queryKey: ["market", "commodities", state ?? ""], queryFn: () => marketApi.commodities(state), staleTime: STALE });
+export function useMarketCommodities(state?: string, include?: string) {
+  return useQuery({
+    queryKey: ["market", "commodities", state ?? "", include ?? ""],
+    queryFn: () => marketApi.commodities(state, include),
+    staleTime: STALE,
+  });
 }
 
 export function useMarketLocations(commodityId?: number) {

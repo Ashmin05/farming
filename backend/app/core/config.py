@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # What the nightly job keeps fresh (comma-separated Agmarknet names), plus
     # every farm's state x crop when MARKET_PRICE_INCLUDE_FARM_CROPS is true.
     MARKET_PRICE_STATES: str = "West Bengal"
-    MARKET_PRICE_COMMODITIES: str = "Potato,Rice,Paddy(Common),Wheat,Tomato,Onion"
+    MARKET_PRICE_COMMODITIES: str = "Potato,Rice,Paddy(Common),Wheat,Tomato,Onion,Sugarcane"
     MARKET_PRICE_INCLUDE_FARM_CROPS: bool = True
     # Days re-fetched each night (late and revised reports get picked up).
     MARKET_PRICE_CURRENT_DAYS: int = 10

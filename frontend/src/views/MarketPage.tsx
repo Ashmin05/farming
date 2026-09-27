@@ -265,7 +265,7 @@ function MarketContent() {
     if (realFarms.length) setFarmId(realFarms[0].id);
   }, [mounted, realFarms]);
 
-  const commodities = useMarketCommodities();
+  const commodities = useMarketCommodities(undefined, ALLOWED_CROPS.join(","));
   // The most-traded allowed crop, used as the browse-mode default and as the
   // fallback when a farm's real crop isn't one of the allowed ones.
   const topAllowedCommodity = useMemo(() => {
@@ -442,6 +442,12 @@ function MarketContent() {
       )}
       {!farmMode && latest.data && latest.data.prices.length === 0 && (
         <Notice>No recent mandi price is available for {commodityName || "this crop"} in {browseState}.</Notice>
+      )}
+      {!farmMode && !loadingMain && commodityId !== undefined && browseState === undefined && !locations.isLoading && (
+        <Notice>
+          No mandi price data is available for {commodityName || "this crop"} yet. Agmarknet mandis haven&apos;t
+          reported any trades for it.
+        </Notice>
       )}
 
       {stats && staleDays > STALE_AFTER_DAYS && (
