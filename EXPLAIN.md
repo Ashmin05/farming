@@ -29,7 +29,7 @@ future geospatial work on field boundaries).
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
 `satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`,
-`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`) were used during buildout
+`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`, `mandi-prices`) were used during buildout
 and have all been merged into `main`, which is
 what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
@@ -78,6 +78,10 @@ what's pushed to origin and described by this document. Notable merged work, rou
   misleading "No farms yet", nightly jobs that no longer skip every later farm after one DB
   error, Earth Engine errors as clean 503s, real error states for failed layers/timeseries, and
   no more duplicate first analyses (§5.13).
+- `mandi-prices` — real daily mandi prices from Agmarknet via data.gov.in: a retrying,
+  paginated client, a `mandi_prices` table upserted by a nightly job (plus a manual script),
+  `PriceService` with same-district-first nearby mandis, and `GET /market/prices` /
+  `GET /farms/{id}/market` with live/stale provenance (§5.14). Backend-only so far.
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -107,7 +111,9 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - `shapely` + `pyproj` — validates farm polygons and computes area/centroid using a locally
   centered equal-area projection (not raw lat/lng math) — see §5.4
 - `earthengine-api` — the official Google Earth Engine Python SDK (§5.5)
+- `tenacity` — retries with exponential backoff for the data.gov.in mandi price API (§5.14)
 - `pytest` + `pytest-asyncio` + `aiosqlite` — async test suite against an in-memory SQLite DB
+- `respx` — mocks `httpx` requests in tests (data.gov.in responses, §5.14)
 
 **Database**
 - PostgreSQL 17 with the **PostGIS** extension enabled — farms are stored with a `JSON`/`JSONB`
@@ -247,14 +253,16 @@ backend/
 │   │   ├── farm_alert.py  # FarmAlert ORM model (§5.9)
 │   │   ├── satellite_layer_set.py  # SatelliteLayerSet ORM model — cached tile URLs (§5.10)
 │   │   ├── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
-│   │   └── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
+│   │   ├── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
+│   │   └── mandi_price.py  # MandiPrice + MandiPriceSync ORM models — daily mandi prices (§5.14)
 │   ├── schemas/
 │   │   ├── auth.py        # pydantic request/response models for /auth/*
 │   │   ├── farm.py        # pydantic request/response models for /farms
 │   │   ├── satellite.py   # pydantic request/response models for /farms/{id}/satellite/*
 │   │   ├── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
 │   │   ├── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
-│   │   └── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
+│   │   ├── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
+│   │   └── market.py      # pydantic request/response models for /market/prices, /farms/{id}/market (§5.14)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
 │   │   ├── farm_repository.py   # DB queries for Farm, scoped to owner
@@ -263,31 +271,37 @@ backend/
 │   │   ├── farm_alert_repository.py  # DB queries for FarmAlert, incl. de-dup check
 │   │   ├── satellite_layer_repository.py  # DB queries for SatelliteLayerSet, incl. upsert (§5.10)
 │   │   ├── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
-│   │   └── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
+│   │   ├── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
+│   │   └── mandi_price_repository.py  # MandiPrice bulk upsert, latest-per-market query, sync runs (§5.14)
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   └── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
+│   │   ├── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
+│   │   └── agmarknet_client.py  # data.gov.in mandi price API client: paging, retries, normalising (§5.14)
 │   ├── services/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
-│   │   └── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
+│   │   ├── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
+│   │   └── price_service.py     # mandi prices: latest per market, nearby mandis, provenance, sync (§5.14)
 │   ├── routers/
 │   │   ├── health.py      # GET /health, GET /health/earth-engine
 │   │   ├── auth.py        # register/login/google/refresh/me + profile
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
 │   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
-│   │   └── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   │   ├── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   │   └── market.py      # GET /market/prices, GET /farms/{id}/market (§5.14)
 │   ├── jobs/
-│   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11)
+│   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11), mandi prices (§5.14)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 132 tests
+├── scripts/
+│   └── sync_mandi_prices.py  # manual trigger for the mandi price sync (§5.14)
+└── tests/                   # pytest suite (async, in-memory SQLite) — 173 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
 → **repositories** (DB queries) → **models** (ORM). `schemas/` are the pydantic request/response
 shapes, kept separate from the ORM models. `integrations/` wraps external services (Google auth,
-Earth Engine) behind a small interface the rest of the app depends on.
+Earth Engine, data.gov.in) behind a small interface the rest of the app depends on.
 
 ### 5.2 API surface today
 
@@ -313,6 +327,9 @@ Earth Engine) behind a small interface the rest of the app depends on.
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 | GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
 | GET | `/farms/{farm_id}/environment` | Cache-only read of rainfall (CHIRPS)/land-surface temperature (MODIS)/soil moisture (SMAP, regional), refreshed nightly, plus soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution; 404 if no report yet (§5.11) |
+
+| GET | `/market/prices?commodity=&state=&district=` | Latest stored mandi price per market (Rs/quintal) for a commodity or crop name — public, cache-only; `provenance` {source, is_live, as_of} (§5.14) |
+| GET | `/farms/{farm_id}/market` | Latest prices for the farm's crop at mandis in its district first, then the rest of its state, each tagged `scope` — 404 if not yours (§5.14) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -770,6 +787,75 @@ page showed the load error, and Try again recovered once the backend was back. R
 against a new farm's background analysis stored exactly one analysis (the temp farm was then
 deleted).
 
+### 5.14 Mandi prices from Agmarknet via data.gov.in (`mandi-prices`)
+
+Real daily wholesale prices from India's APMC mandis, replacing nothing yet on the frontend (the
+Dashboard's mandi cards are still hardcoded, §10) but fully usable through the API.
+
+- **Source**: data.gov.in's Open Government Data resource *"Current Daily Price of Various
+  Commodities from Various Markets (Mandi)"*, resource id
+  **`9ef84268-d588-465a-a308-a864a43d0070`** (Agmarknet data). It holds the latest day's reports
+  from every mandi that reported — a few thousand rows nationally — one row per
+  (market, commodity, variety, grade) with min/max/modal price in **Rs/quintal**. Needs a free
+  `DATA_GOV_IN_API_KEY` (§7).
+- **`app/integrations/agmarknet_client.py`** — `AgmarknetClient.fetch_all(state=, commodity=)`
+  calls the resource with `format=json`, pages with `limit`/`offset` until the reported `total`
+  is reached (500 rows per page, 50,000-row safety cap), and filters with
+  `filters[state.keyword]` / `filters[commodity]`. data.gov.in's gateway is slow and often
+  returns 502/504, so each request has a 90 s timeout (15 s connect) and is retried with
+  **tenacity** — exponential backoff (2 s → 30 s), up to 4 attempts — on timeouts, connection
+  errors, 429 and 5xx. A 4xx (e.g. a rejected key), an error body in a 200, or non-JSON fails
+  immediately as `AgmarknetRequestError`.
+- **Normalising** (`normalise_record`): text fields trimmed and whitespace-collapsed;
+  `arrival_date` `dd/mm/yyyy` (or ISO) → `date`; prices from strings like `"1,950"` → float;
+  blank min/max fall back to the modal price; blank variety → `"Other"`. Rows without a market,
+  commodity, parseable date or modal price are dropped and counted in the log.
+- **`mandi_prices` table** (`app/models/mandi_price.py`, migration `955dfa24bfab`) with a unique
+  constraint on **`(market, commodity, variety, arrival_date)`** and an index on
+  `(commodity, state, arrival_date)`. `MandiPriceRepository.upsert_many()` does a bulk
+  `INSERT … ON CONFLICT DO UPDATE` (Postgres; the SQLite equivalent in tests) in 1,000-row chunks.
+  Duplicate keys within one batch — Agmarknet can report one variety twice under different grades
+  — are collapsed to the last one first, since Postgres rejects an `ON CONFLICT` statement that
+  touches the same row twice.
+- **`mandi_price_syncs` table** records every sync run (started/finished, succeeded, rows
+  upserted, error). It drives `provenance.is_live`.
+- **`PriceService`** (`app/services/price_service.py`):
+  - `latest_prices(commodity, state, district)` — the latest report **per market** (mandis report
+    on different days, so "latest" isn't one global date), within 7 days of the newest matching
+    report. Matching is case-insensitive, and farm crop names map to Agmarknet's names where they
+    differ ("Rice" → "Paddy(Dhan)(Common)"/"(Basmati)"/"Rice", "Soybean" → "Soyabean", "Chilli" →
+    "Chili Red"/"Green Chilli", "Cotton" → "Cotton"/"Kapas").
+  - `nearby_mandis(farm)` — the same for the farm's crop in its state, **same district first**,
+    then the rest of the state, each tagged `scope: "district" | "state"`. Empty if the farm has no
+    state.
+  - `sync_prices()` — fetch + upsert, recorded in `mandi_price_syncs`. Never raises: a failure is
+    rolled back and recorded as a failed run. Skips (records nothing) without an API key.
+- **Provenance** on every response: `{source: "Agmarknet via data.gov.in", is_live, as_of}`.
+  `as_of` is the newest `arrival_date` among the returned prices. `is_live` is true only if the
+  latest sync run **succeeded within the last 36 h**. If the job fails (or silently stops running),
+  the API keeps serving the last stored day with `is_live: false`.
+- **Routes** (`app/routers/market.py`): `GET /market/prices?commodity=&state=&district=` (public —
+  no user data, pure DB read) and `GET /farms/{id}/market` (signed in, 404 if not your farm). Both
+  are cache-only reads; nothing calls data.gov.in on a request.
+- **Nightly job** `run_nightly_mandi_price_sync` at **23:00** server time (after most mandis have
+  reported the day), alongside the 02:00/02:30 satellite jobs. **Manual trigger**:
+  `python scripts/sync_mandi_prices.py [--state …] [--commodity …]` (§8), which exits non-zero if
+  the sync fails.
+- **Tests**: 41 new. `tests/test_agmarknet_client.py` runs against **respx**-mocked data.gov.in
+  responses: paging/filters, normalising, retries on 502/504/timeouts/429, giving up after N
+  attempts, no retry on 403, and error bodies. `tests/test_price_service.py` covers the upsert
+  (update on conflict, in-batch duplicates), latest-per-market, crop aliases, district-first
+  ordering, `is_live` (never synced / recent success / failed / overdue), the sync recording
+  success and failure (failure keeps serving stored prices, marked not live), and the nightly job
+  itself.
+- **Live verification status**: during development (Sept 2026) `api.data.gov.in` returned
+  **502/504 on every request**, so no real rows have been ingested yet. The manual script run
+  against the real API retried 4 times, gave up, recorded a failed `mandi_price_syncs` row and
+  exited 1, and `/market/prices` then answered with `is_live: false`. That confirms the failure path
+  end to end. The success path is covered by the respx tests, which are written to the resource's
+  documented field schema. Re-run `scripts/sync_mandi_prices.py --max-records 10` once the gateway
+  is back to confirm it against real data.
+
 ---
 
 ## 6. Authentication system (the main feature built so far)
@@ -971,6 +1057,7 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `DATABASE_URL` | Backend | Async SQLAlchemy/Postgres connection string (`postgresql+asyncpg://...`) |
 | `FRONTEND_ORIGIN` | Backend | Sole allowed CORS origin |
 | `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | Backend | Reserved for future `app/integrations/` clients — unused today |
+| `DATA_GOV_IN_API_KEY` | Backend | data.gov.in API key for daily mandi prices (§5.14) — free at https://data.gov.in (sign up → My Account → API key). Blank = the sync job skips and the API serves whatever is stored |
 | `JWT_SECRET_KEY` | Backend | Signs JWTs — **must** be overridden outside local dev |
 | `JWT_ALGORITHM` | Backend | Default `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Backend | Default `30` |
@@ -1007,16 +1094,24 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 132 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 173 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
-**Nightly jobs (§5.9, §5.11)**: both start automatically with the backend (registered in `main.py`'s
-`lifespan`) — timeseries+alerts at 02:00 server time, environment at 02:30 — inconvenient to wait for
+**Nightly jobs (§5.9, §5.11, §5.14)**: all start automatically with the backend (registered in `main.py`'s
+`lifespan`) — timeseries+alerts at 02:00 server time, environment at 02:30, mandi prices at 23:00
+(manual trigger for that one: `scripts/sync_mandi_prices.py`, see below) — inconvenient to wait for
 during local dev. To trigger either immediately instead, run (from `backend/` with the venv active,
 and `earth_engine_client.initialize()` first if running outside the actual FastAPI process):
 ```bash
 python -c "import asyncio; from app.jobs.scheduler import run_nightly_timeseries_refresh; asyncio.run(run_nightly_timeseries_refresh())"
 python -c "import asyncio; from app.jobs.scheduler import run_nightly_environment_refresh; asyncio.run(run_nightly_environment_refresh())"
+```
+
+**Mandi prices (§5.14)**: set `DATA_GOV_IN_API_KEY` in `.env`. The sync runs nightly at 23:00
+server time; to run it now (from `backend/` with the venv active):
+```bash
+python scripts/sync_mandi_prices.py                                  # all states
+python scripts/sync_mandi_prices.py --state Maharashtra --commodity Onion
 ```
 
 **Frontend**:
@@ -1052,6 +1147,7 @@ npm run dev    # http://localhost:3000
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
 | Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
+| Mandi prices (backend) | ✅ Real — nightly sync from Agmarknet via data.gov.in into `mandi_prices`; `GET /market/prices` and `GET /farms/{id}/market` with live/stale provenance; see §5.14. Needs a `DATA_GOV_IN_API_KEY`. Not yet wired into the frontend — the Dashboard's "Live Mandi Price" cards are still hardcoded text |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
@@ -1074,6 +1170,16 @@ npm run dev    # http://localhost:3000
   `error_code` field) would be cleaner.
 - **Move the refresh-analysis dedupe lock (§5.13) to the database or Redis before running more than
   one backend worker.** Today it's a per-process `asyncio.Lock`.
+- **Wire mandi prices (§5.14) into the frontend** — replace the Dashboard's hardcoded "Live Mandi
+  Price" cards with `GET /farms/{id}/market` for signed-in users, showing `provenance.is_live`
+  the same way satellite numbers show a `SourceBadge`.
+- **Revisit the mandi price unique key if collisions show up** — it's `(market, commodity,
+  variety, arrival_date)` as specified, without `state` or `grade`. Two same-named markets in
+  different states, or two grades of one variety, would overwrite each other. The sync collapses
+  in-batch duplicates so this can't error, but one of the rows is lost.
+- **District names in farm records must match Agmarknet's spelling** for the same-district-first
+  ordering of `/farms/{id}/market` (matching is case-insensitive but otherwise exact) — e.g.
+  "Ahmednagar" vs "Ahilyanagar". A small alias table may be needed as real farms come in.
 - **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked
   for, but Earth Engine flags it deprecated and it stopped updating around mid-2025; the response
   already surfaces this honestly via `as_of` rather than hiding it, but the underlying collection

@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     GEE_SERVICE_ACCOUNT_EMAIL: str | None = None
     GEE_KEY_PATH: str | None = None
 
+    # data.gov.in Open Government Data API key (free: sign up at
+    # https://data.gov.in, then "My Account" -> API key). Used by
+    # app/integrations/agmarknet_client.py for daily mandi prices. Missing ->
+    # the mandi price sync job skips, and the API serves whatever is stored.
+    DATA_GOV_IN_API_KEY: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

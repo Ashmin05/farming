@@ -3,6 +3,7 @@ from app.models.environment_snapshot import EnvironmentSnapshot
 from app.models.farm import Farm
 from app.models.farm_alert import FarmAlert
 from app.models.index_timeseries import IndexTimeseriesPoint
+from app.models.mandi_price import MandiPrice, MandiPriceSync
 from app.models.satellite_layer_set import SatelliteLayerSet
 from app.models.satellite_observation import SatelliteObservation
 from app.models.stress_zone import StressZone
@@ -14,6 +15,8 @@ __all__ = [
     "Farm",
     "FarmAlert",
     "IndexTimeseriesPoint",
+    "MandiPrice",
+    "MandiPriceSync",
     "SatelliteLayerSet",
     "SatelliteObservation",
     "StressZone",

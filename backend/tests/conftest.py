@@ -9,6 +9,7 @@ from app.repositories.environment_snapshot_repository import EnvironmentSnapshot
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
+from app.repositories.mandi_price_repository import MandiPriceRepository
 from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.stress_zone_repository import StressZoneRepository
@@ -84,3 +85,8 @@ def stress_zone_repository(session: AsyncSession) -> StressZoneRepository:
 @pytest.fixture
 def environment_snapshot_repository(session: AsyncSession) -> EnvironmentSnapshotRepository:
     return EnvironmentSnapshotRepository(session)
+
+
+@pytest.fixture
+def mandi_price_repository(session: AsyncSession) -> MandiPriceRepository:
+    return MandiPriceRepository(session)
