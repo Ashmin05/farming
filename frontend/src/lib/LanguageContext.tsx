@@ -72,7 +72,7 @@ export interface TranslationDictionary {
   cropRice: string;
   cropWheat: string;
   cropOnion: string;
-  cropTomato: string;
+  cropPotato: string;
   cropSugarcane: string;
 
   // Bottom CTA
@@ -150,7 +150,7 @@ const translations: Record<Language, TranslationDictionary> = {
     cropRice: "Rice",
     cropWheat: "Wheat",
     cropOnion: "Onion",
-    cropTomato: "Tomato",
+    cropPotato: "Potato",
     cropSugarcane: "Sugarcane",
 
     bottomCtaTitle: "A greener, stronger India starts with informed farmers.",
@@ -225,7 +225,7 @@ const translations: Record<Language, TranslationDictionary> = {
     cropRice: "ধান (Rice)",
     cropWheat: "গম (Wheat)",
     cropOnion: "পেঁয়াজ (Onion)",
-    cropTomato: "টমেটো (Tomato)",
+    cropPotato: "আলু (Potato)",
     cropSugarcane: "আখ (Sugarcane)",
 
     bottomCtaTitle: "সচেতন কৃষকের হাত ধরেই গড়ে উঠবে সমৃদ্ধ ভারত।",
@@ -300,7 +300,7 @@ const translations: Record<Language, TranslationDictionary> = {
     cropRice: "चावल (Rice)",
     cropWheat: "गेहूं (Wheat)",
     cropOnion: "प्याज (Onion)",
-    cropTomato: "टमाटर (Tomato)",
+    cropPotato: "आलू (Potato)",
     cropSugarcane: "गन्ना (Sugarcane)",
 
     bottomCtaTitle: "सशक्त किसान से ही बनेगा समृद्ध भारत।",
