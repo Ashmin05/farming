@@ -200,3 +200,42 @@ class PriceQualityIssue(Base):
     source_record_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw: Mapped[dict | None] = mapped_column(JsonVariant, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class PriceBackfillJob(Base):
+    """A configured historical import: date range x states x commodities
+    (optionally one district/market), split into month-sized tasks so an
+    interrupted job resumes where it stopped."""
+
+    __tablename__ = "price_backfill_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    params: Mapped[dict] = mapped_column(JsonVariant, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending|running|done|incomplete
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+
+class PriceBackfillTask(Base):
+    __tablename__ = "price_backfill_tasks"
+    __table_args__ = (
+        UniqueConstraint("job_id", "state", "commodity", "period_start", name="uq_backfill_task_slice"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("price_backfill_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(100), nullable=False)
+    commodity: Mapped[str] = mapped_column(String(150), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending|running|done|failed
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    records_fetched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_rejected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("price_ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)

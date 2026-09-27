@@ -43,6 +43,7 @@ from app.integrations.market_prices.base import (
     ProviderCatalog,
     ProviderError,
     ProviderPriceBatch,
+    ProviderUnsupportedError,
 )
 from app.integrations.market_prices.http import (
     DEFAULT_MAX_ATTEMPTS,
@@ -164,7 +165,16 @@ class AgmarknetProvider:
         commodity = resolve_commodity(catalog, query.commodity)
         batch = ProviderPriceBatch()
 
-        for year, month in months_between(query.from_date, query.to_date):
+        start = query.from_date
+        earliest = catalog.earliest_price_date
+        if earliest and query.to_date < earliest:
+            # Lets the ingestion fall back to a provider with older data (CEDA).
+            raise ProviderUnsupportedError(f"Agmarknet 2.0 has prices only from {earliest.isoformat()}")
+        if earliest and start < earliest:
+            batch.notes.append(f"Agmarknet 2.0 has prices only from {earliest.isoformat()}; earlier days skipped")
+            start = earliest
+
+        for year, month in months_between(start, query.to_date):
             body = await self._get(
                 DATEWISE_PATH,
                 {
