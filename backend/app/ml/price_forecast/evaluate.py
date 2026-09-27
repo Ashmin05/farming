@@ -32,12 +32,16 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from app.ml.price_forecast.models import ALL_MODELS, Forecaster
+from app.ml.price_forecast.models import ALL_MODELS, Forecaster, bounded
 
 N_FOLDS = 4
 FOLD_DAYS = 30
 MIN_PRICE_FOR_MAPE = 1.0
 INTERVAL = (0.10, 0.90)
+
+
+def _finite(value: float, digits: int = 2) -> float | None:
+    return round(float(value), digits) if np.isfinite(value) else None
 
 
 def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
@@ -47,9 +51,9 @@ def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
     mape_mask = actual >= MIN_PRICE_FOR_MAPE
     return {
         "n": int(len(actual)),
-        "mae": round(float(np.mean(np.abs(errors))), 2) if len(actual) else None,
-        "rmse": round(float(np.sqrt(np.mean(errors**2))), 2) if len(actual) else None,
-        "mape": round(float(np.mean(np.abs(errors[mape_mask] / actual[mape_mask])) * 100), 2) if mape_mask.any() else None,
+        "mae": _finite(np.mean(np.abs(errors))) if len(actual) else None,
+        "rmse": _finite(np.sqrt(np.mean(errors**2))) if len(actual) else None,
+        "mape": _finite(np.mean(np.abs(errors[mape_mask] / actual[mape_mask])) * 100) if mape_mask.any() else None,
         "mape_excluded": int((~mape_mask).sum()),
     }
 
@@ -124,7 +128,7 @@ def evaluate(ds: pd.DataFrame, horizon: int, model_classes=ALL_MODELS) -> Evalua
         for k, train_idx, test_idx in split:
             train, test = ds.loc[train_idx], ds.loc[test_idx]
             model.fit(train, train[target])
-            pred_log = model.predict(test)
+            pred_log = bounded(model.predict(test))
             predicted = test["current_modal_price"].to_numpy() * np.exp(pred_log)
             actual = test[target_price].to_numpy()
             by_fold.append({"fold": k, "from": str(test["date"].min().date()), "to": str(test["date"].max().date()),
@@ -144,9 +148,12 @@ def evaluate(ds: pd.DataFrame, horizon: int, model_classes=ALL_MODELS) -> Evalua
 
     baselines = {n: r for n, r in results.items() if r.kind == "baseline"}
     learned = {n: r for n, r in results.items() if r.kind == "learned"}
-    best_baseline = min(baselines.values(), key=lambda r: r.pooled["mae"])
-    best_learned = min(learned.values(), key=lambda r: r.pooled["mae"]) if learned else None
-    if best_learned and best_learned.pooled["mae"] < best_baseline.pooled["mae"]:
+    def mae(r: ModelResult) -> float:
+        return r.pooled["mae"] if r.pooled["mae"] is not None else float("inf")
+
+    best_baseline = min(baselines.values(), key=mae)
+    best_learned = min(learned.values(), key=mae) if learned else None
+    if best_learned and mae(best_learned) < mae(best_baseline):
         selected = best_learned
         gain = (1 - best_learned.pooled["mae"] / best_baseline.pooled["mae"]) * 100
         note = f"{selected.name} beat the best baseline ({best_baseline.name}) by {gain:.1f}% MAE"

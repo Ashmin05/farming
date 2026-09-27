@@ -7,7 +7,8 @@ Baselines first (they're what any model has to beat):
 Then learned models:
   ridge            linear regression (L2) on scaled features
   random_forest    bagged trees
-  lightgbm         gradient-boosted trees
+  lightgbm         gradient-boosted trees (squared error)
+  lightgbm_huber   the same with Huber loss (robust to price jumps)
 Deep sequence models (LSTM/GRU) are deliberately not included: with a few
 years of daily data per market, tree ensembles and linear models are the
 appropriate tools, and validation decides between them.
@@ -26,6 +27,16 @@ from sklearn.preprocessing import StandardScaler
 from app.ml.price_forecast.dataset import model_features, seasonal_feature
 
 MAX_TRAIN_ROWS = 60_000  # subsample for the slower learners
+# Sanity cap on a predicted move: x0.22 .. x4.5 of today's price. Linear
+# models can extrapolate wildly on unusual feature values; an estimate
+# beyond this is never plausible for a mandi price within 30 days.
+MAX_ABS_LOG_CHANGE = 1.5
+
+
+def bounded(prediction) -> np.ndarray:
+    """Model output -> finite, capped log price ratios."""
+    values = np.nan_to_num(np.asarray(prediction, dtype=float), nan=0.0, posinf=MAX_ABS_LOG_CHANGE, neginf=-MAX_ABS_LOG_CHANGE)
+    return np.clip(values, -MAX_ABS_LOG_CHANGE, MAX_ABS_LOG_CHANGE)
 
 
 class Forecaster:
@@ -144,6 +155,34 @@ class LightGBMModel(_Learned):
         return self
 
 
+class LightGBMHuberModel(LightGBMModel):
+    """Same trees, Huber loss: mandi prices are sticky (many unchanged
+    weeks) with occasional large jumps, so a loss that doesn't chase the
+    jumps suits MAE-based selection better than squared error."""
+
+    name = "lightgbm_huber"
+
+    def fit(self, X, y):
+        from lightgbm import LGBMRegressor
+
+        X, y = self._subsample(X, y)
+        self.model = LGBMRegressor(
+            objective="huber",
+            alpha=0.02,  # ~2% move: beyond it errors count linearly
+            n_estimators=400,
+            learning_rate=0.03,
+            num_leaves=31,
+            min_child_samples=40,
+            subsample=0.8,
+            subsample_freq=1,
+            colsample_bytree=0.8,
+            random_state=0,
+            verbose=-1,
+        )
+        self.model.fit(X[self.features], y)
+        return self
+
+
 BASELINES = (NaiveModel, MovingAverageModel, SeasonalNaiveModel)
-LEARNED = (RidgeModel, RandomForestModel, LightGBMModel)
+LEARNED = (RidgeModel, RandomForestModel, LightGBMModel, LightGBMHuberModel)
 ALL_MODELS = (*BASELINES, *LEARNED)
