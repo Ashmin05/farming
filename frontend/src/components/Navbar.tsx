@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Menu, X, Sprout, LogIn, LogOut, LayoutDashboard, Globe, ChevronDown } from "lucide-react";
+import { Menu, X, LogIn, LogOut, LayoutDashboard, Globe, ChevronDown } from "lucide-react";
 import { useLanguage, type Language } from "@/lib/LanguageContext";
 import { isAuthenticated, logout } from "@/lib/auth/auth-client";
 
@@ -44,13 +45,8 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-16">
           {/* Left: Logo & Quick Yellow Login */}
           <div className="flex items-center gap-3">
-            <Link href="/" onClick={() => setMobileOpen(false)} className="flex items-center gap-2 group flex-shrink-0" title="Return to FasalSetu Home">
-              <div className="w-8 h-8 bg-farm-green rounded-lg flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
-                <Sprout className="w-4 h-4 text-white" strokeWidth={2.5} />
-              </div>
-              <span className="font-bold text-farm-dark text-lg tracking-tight">
-                Fasal<span className="text-farm-green">Setu</span>
-              </span>
+            <Link href="/" onClick={() => setMobileOpen(false)} className="flex items-center flex-shrink-0 group" title="Return to FasalSetu Home">
+              <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-9 w-auto group-hover:scale-105 transition-transform" priority />
             </Link>
 
             {/* Left-side Login / Sign out button */}

@@ -1,5 +1,5 @@
+import Image from "next/image";
 import Link from "next/link";
-import { Sprout } from "lucide-react";
 
 const footerLinks = {
   Product: [
@@ -43,13 +43,8 @@ export default function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-12">
           {/* Brand */}
           <div className="md:col-span-2">
-            <Link href="/" className="flex items-center gap-2 mb-4">
-              <div className="w-9 h-9 bg-farm-green rounded-lg flex items-center justify-center">
-                <Sprout className="w-5 h-5 text-white" strokeWidth={2.5} />
-              </div>
-              <span className="font-bold text-xl">
-                Fasal<span className="text-farm-green-mid">Setu</span>
-              </span>
+            <Link href="/" className="inline-flex mb-4 bg-white rounded-lg px-3 py-1.5">
+              <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-9 w-auto" />
             </Link>
             <p className="text-white/60 text-sm leading-relaxed max-w-xs">
               Empowering Indian farmers with satellite intelligence, AI-driven advice,
