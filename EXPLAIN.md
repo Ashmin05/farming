@@ -1124,6 +1124,32 @@ history, the stored forecasts and model info, the recommendation, and nearby man
   and the suggestion's headline and reason, with a perishable note. Guests get a sign-in prompt.
 - **Removed:** `ForecastPanel` and `ForecastChart` (replaced by the chart above), and
   `MandiPulseCard`.
+- **Empty states:** when there's no estimate, the chart still draws the Live line, the legend
+  drops its Estimate / Expected range entries, and a notice gives the reason. The x-axis has fixed
+  date ticks every 15 days, so a mandi with only a few days of data still gets a readable
+  timeline.
+
+**Checked in the browser** (27 Sep 2026, against the real database):
+- **A crop with no model:** Wheat at Shevgaon(Bodhegaon), Maharashtra. The page showed the Live
+  price (₹2,700 on 26 Sep), the 90-day actual line and "No estimate for this mandi: no model has
+  been trained for this commodity in this state yet". The card said "No suggestion".
+- **Actual vs forecast:** Onion at Bara Bazar, West Bengal. The chart showed the solid Live line
+  up to the Today marker, then the dashed Estimate line with the shaded 80% range. The 7/14/30-day
+  estimate cards sat above the chart.
+- **Never hold inside the error:** checked on the same onion data, the suggestion is "Sell now".
+  The 30-day estimate is +₹469/quintal, but the rise left after holding cost (₹271) is inside the
+  model's ±₹896 error. The card was rendered with this real payload.
+  - This one isn't visible on the owners' farms yet. They're all in Maharashtra, where no model is
+    trained, so every farm there gets "No suggestion".
+  - Seeing it on a real farm needs a farm in West Bengal, or a Maharashtra backfill and training
+    run (§10).
+
+Fixes made during those checks:
+- The model tooltip closed straight after a click. Focusing the button opened it and the click
+  then toggled it shut; a click now only opens it.
+- A "Sell now" reason quoted the 7-day estimate ("rise ₹0") while the 30-day estimate rose. The
+  reason now uses the most favourable estimate.
+- The two chart empty-state fixes above.
 
 **Tests** (10 new, 252 in the suite): the rule itself covers
 - hold only when the rise beats error + holding cost
@@ -1484,7 +1510,10 @@ npm run dev    # http://localhost:3000
   - weather/arrival forecasts as features
   - quantile models for the intervals
 - **Backfill more states** (only West Bengal has history). Farms' states get current prices
-  nightly, but they need a backfill before forecasts can be trained for them.
+  nightly, but they need a backfill before forecasts can be trained for them. Until then, farms
+  outside West Bengal get "No suggestion" on the Market page (§5.15). All the registered farms
+  are in Maharashtra, so run `backfill_market_prices` + `train_price_models` for Maharashtra ×
+  the farms' crops next.
 - **Rice's daily series mixes varieties** (fine vs coarse), which causes most of the "abnormal
   change" rows in the quality report. A dominant-variety series would be cleaner.
 - **Market name ambiguity**: a price reported as "Bishnupur APMC" doesn't match the catalogue's
