@@ -655,24 +655,6 @@ export default function FarmsPage() {
                   </span>
                 </div>
 
-                {/* Yield & Price mini-summary */}
-                <div className="p-2.5 bg-amber-50/60 rounded-xl border border-amber-200/60 text-xs flex items-center justify-between">
-                  <span className="text-amber-900 font-medium">Est. Yield: <strong>{farm.yield.estimatedQuintals} Qtl</strong></span>
-                  <span className="text-emerald-700 font-bold">₹{farm.yield.totalEstimatedValue.toLocaleString("en-IN")}</span>
-                </div>
-
-                {/* Soil & Water mini-summary */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2 bg-farm-gray rounded-lg">
-                    <span className="text-[10px] text-farm-muted block">Soil pH</span>
-                    <strong className="text-farm-dark">{farm.soil.ph} ({farm.soil.healthRating})</strong>
-                  </div>
-                  <div className="p-2 bg-sky-50 rounded-lg border border-sky-200/50">
-                    <span className="text-[10px] text-sky-700 block">Water Status</span>
-                    <strong className="text-sky-900">{farm.water.status}</strong>
-                  </div>
-                </div>
-
                 {/* Satellite health */}
                 <div className="pt-1">
                   <div className="flex items-center justify-between text-xs text-farm-muted mb-1">
