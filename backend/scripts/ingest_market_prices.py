@@ -23,7 +23,7 @@ from app.core.config import settings  # noqa: E402
 from app.core.database import AsyncSessionLocal  # noqa: E402
 from app.integrations.market_prices.base import PriceQuery  # noqa: E402
 from app.integrations.market_prices.registry import build_provider, configured_providers  # noqa: E402
-from app.jobs.market_prices import run_current_price_ingestion  # noqa: E402
+from app.jobs.market_prices import refresh_after_ingestion, run_current_price_ingestion  # noqa: E402
 from app.services.market_prices.ingestion import MarketPriceIngestionService  # noqa: E402
 
 
@@ -52,9 +52,11 @@ async def main() -> int:
             commodities = args.commodity or settings.market_price_commodities
             queries = [PriceQuery(s, c, from_date, to_date) for s in states for c in commodities]
             async with AsyncSessionLocal() as session:
-                run = await MarketPriceIngestionService(session, providers, today=today).ingest(
+                service = MarketPriceIngestionService(session, providers, today=today)
+                run = await service.ingest(
                     queries, kind="current", params={"manual": True, "from": str(from_date), "to": str(to_date)}
                 )
+                await refresh_after_ingestion(session, service.touched)
     finally:
         for provider in providers:
             await provider.aclose()

@@ -22,6 +22,7 @@ from app.integrations.market_prices.agmarknet import months_between
 from app.integrations.market_prices.base import PriceDataProvider, PriceQuery
 from app.models.market_price import PriceBackfillJob, PriceBackfillTask
 from app.repositories.market_price_repository import MarketPriceRepository
+from app.services.market_prices.analytics import refresh_analytics
 from app.services.market_prices.ingestion import MarketPriceIngestionService
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,9 @@ class MarketPriceBackfillService:
                 task.status, outcome.stats.fetched, outcome.stats.inserted,
                 f" -- {outcome.error}" if outcome.error else "",
             )
+
+        if ingestion.touched:
+            await refresh_analytics(self.session, ingestion.touched)
 
         progress = await self.progress(job_id)
         job = await self.session.get(PriceBackfillJob, job_id)

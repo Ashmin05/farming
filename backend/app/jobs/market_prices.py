@@ -11,6 +11,7 @@ from app.core.database import AsyncSessionLocal
 from app.integrations.market_prices.agmarknet import AgmarknetProvider
 from app.integrations.market_prices.registry import configured_providers
 from app.models.market_price import PriceIngestionRun
+from app.services.market_prices.analytics import refresh_analytics
 from app.services.market_prices.ingestion import MarketPriceIngestionService
 from app.services.market_prices.watchlist import current_queries, watchlist
 
@@ -20,6 +21,19 @@ logger = logging.getLogger(__name__)
 async def _close(providers) -> None:
     for provider in providers:
         await provider.aclose()
+
+
+async def refresh_after_ingestion(session, touched) -> None:
+    """Rebuild the daily series + stats for whatever the ingestion changed.
+    Logged, not raised: stale analytics beat a failed job."""
+    if not touched:
+        return
+    try:
+        summary = await refresh_analytics(session, touched)
+        logger.info("Market price analytics refreshed: %s", summary)
+    except Exception:  # noqa: BLE001
+        await session.rollback()
+        logger.exception("Market price analytics refresh failed")
 
 
 async def run_market_catalog_sync(session_factory=None) -> PriceIngestionRun:
@@ -56,6 +70,7 @@ async def run_current_price_ingestion(
             run = await service.ingest(
                 queries, kind="current", params={"pairs": [list(p) for p in pairs], "days_back": settings.MARKET_PRICE_CURRENT_DAYS}
             )
+            await refresh_after_ingestion(session, service.touched)
     finally:
         if owned:
             await _close(providers)

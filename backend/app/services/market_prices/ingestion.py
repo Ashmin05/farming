@@ -90,6 +90,9 @@ class MarketPriceIngestionService:
         self.providers = providers
         self.today = today or date.today()
         self.resolver = CatalogResolver(session)
+        # commodity_id -> earliest arrival_date inserted/updated, for the
+        # analytics refresh that follows (see analytics.refresh_analytics).
+        self.touched: dict[int, date] = {}
 
     # ------------------------------------------------------------ catalogue
 
@@ -298,6 +301,10 @@ class MarketPriceIngestionService:
         await self.repository.insert_prices(to_insert)
         await self.repository.update_prices(to_update)
         stats.inserted, stats.updated = len(to_insert), len(to_update)
+        for row in (*to_insert, *to_update):
+            earliest = self.touched.get(row["commodity_id"])
+            if earliest is None or row["arrival_date"] < earliest:
+                self.touched[row["commodity_id"]] = row["arrival_date"]
 
         # 5. log flags for rows whose data is new or changed
         for row, flags in rows:

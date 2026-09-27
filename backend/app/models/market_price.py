@@ -80,6 +80,9 @@ class Market(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     coordinate_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # How close the point is to the actual yard: "place" (the market's own
+    # town/locality matched) or "district" (only the district could be found).
+    coordinate_precision: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class Commodity(Base):
@@ -239,3 +242,60 @@ class PriceBackfillTask(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("price_ingestion_runs.id", ondelete="SET NULL"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+
+class MarketPriceDaily(Base):
+    """One price per market x commodity x day -- the series analytics and
+    forecasting use. Several reports that day (varieties/lots) are combined
+    into an arrival-weighted modal price (plain mean when any report lacks
+    arrivals); min/max are the day's extremes. When sources overlap, the
+    primary source's reports win. Rebuilt from market_prices after ingestion."""
+
+    __tablename__ = "market_price_daily"
+    __table_args__ = (
+        Index("ix_market_price_daily_commodity_date", "commodity_id", "date"),
+        Index("ix_market_price_daily_state_commodity_date", "state_id", "commodity_id", "date"),
+    )
+
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), primary_key=True)
+    commodity_id: Mapped[int] = mapped_column(ForeignKey("commodities.id", ondelete="CASCADE"), primary_key=True)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    state_id: Mapped[int] = mapped_column(ForeignKey("states.id", ondelete="CASCADE"), nullable=False)
+    modal_price: Mapped[Decimal] = mapped_column(Price, nullable=False)
+    min_price: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    max_price: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    arrival_quantity: Mapped[Decimal | None] = mapped_column(Quantity, nullable=True)
+    report_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    weighted: Mapped[bool] = mapped_column(nullable=False, default=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class MarketPriceStats(Base):
+    """Precomputed analytics per market x commodity as of its latest report
+    (refreshed after every ingestion -- never computed per request)."""
+
+    __tablename__ = "market_price_stats"
+    __table_args__ = (Index("ix_market_price_stats_state_commodity", "state_id", "commodity_id"),)
+
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), primary_key=True)
+    commodity_id: Mapped[int] = mapped_column(ForeignKey("commodities.id", ondelete="CASCADE"), primary_key=True)
+    state_id: Mapped[int] = mapped_column(ForeignKey("states.id", ondelete="CASCADE"), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    current_modal_price: Mapped[Decimal] = mapped_column(Price, nullable=False)
+    current_min_price: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    current_max_price: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    current_arrival_quantity: Mapped[Decimal | None] = mapped_column(Quantity, nullable=True)
+    avg_7d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    avg_14d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    avg_30d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    change_7d_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_30d_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_7d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    max_7d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    min_30d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    max_30d: Mapped[Decimal | None] = mapped_column(Price, nullable=True)
+    volatility_30d_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trading_days_30d: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trend: Mapped[str] = mapped_column(String(20), nullable=False)  # increasing|stable|decreasing|insufficient_data
+    trend_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
