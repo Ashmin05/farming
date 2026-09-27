@@ -23,7 +23,7 @@ import { useFarmStore, Farm, FarmDraft } from "@/lib/stores/farmStore";
 import {
   MapPin, ChevronRight, Plus, Leaf, X, CheckCircle2,
   Edit3, Calendar, Search, Navigation,
-  Satellite, AlertCircle
+  Satellite, AlertCircle, Trash2
 } from "lucide-react";
 
 const CROPS = [
@@ -569,11 +569,83 @@ function RegisterFarmModal({
   );
 }
 
+// ── Delete Confirmation Modal ─────────────────────────────────────────────────
+
+function ConfirmDeleteModal({
+  farm,
+  onCancel,
+  onConfirm,
+}: {
+  farm: Farm;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-hero border border-farm-border-color w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-farm-dark text-sm">Delete this farm?</h3>
+              <p className="text-xs text-farm-muted mt-1">
+                <strong>{farm.name}</strong> and all of its satellite, soil, and yield data will be
+                permanently removed. This can't be undone.
+              </p>
+            </div>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={deleting}
+              className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true);
+                setError(null);
+                try {
+                  await onConfirm();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Could not delete this farm. Please try again.");
+                  setDeleting(false);
+                }
+              }}
+              className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold hover:bg-red-700 transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> {deleting ? "Deleting..." : "Delete Farm"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Farms View ───────────────────────────────────────────────────────────
 
 export default function FarmsPage() {
-  const { farms, addFarm, mounted, loadError, retryLoad } = useFarmStore();
+  const { farms, addFarm, removeFarm, mounted, loadError, retryLoad } = useFarmStore();
   const [showModal, setShowModal] = useState(false);
+  const [farmToDelete, setFarmToDelete] = useState<Farm | null>(null);
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render an empty shell rather than
@@ -597,6 +669,17 @@ export default function FarmsPage() {
           onClose={() => setShowModal(false)}
           onSave={async (draft, areaAcres) => {
             await addFarm(draft, areaAcres);
+          }}
+        />
+      )}
+
+      {farmToDelete && (
+        <ConfirmDeleteModal
+          farm={farmToDelete}
+          onCancel={() => setFarmToDelete(null)}
+          onConfirm={async () => {
+            await removeFarm(farmToDelete.id);
+            setFarmToDelete(null);
           }}
         />
       )}
@@ -672,6 +755,14 @@ export default function FarmsPage() {
                   >
                     <Satellite className="w-3.5 h-3.5" /> Inspect Satellite & NDVI <ChevronRight className="w-3 h-3" />
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => setFarmToDelete(farm)}
+                    title="Delete farm"
+                    className="text-farm-muted hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             </div>
