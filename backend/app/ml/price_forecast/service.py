@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.ml.price_forecast.dataset import HORIZONS, build_dataset
 from app.ml.price_forecast.evaluate import INTERVAL, evaluate
-from app.ml.price_forecast.models import ALL_MODELS
+from app.ml.price_forecast.models import ALL_MODELS, bounded
 from app.models.market_price import (
     Commodity,
     Market,
@@ -51,6 +51,21 @@ FORECAST_MAX_STALENESS_DAYS = 10  # vs the commodity's newest report in the stat
 FORECAST_MIN_TRADING_DAYS_60 = 15
 # Enough history for the 365-day seasonal feature plus a margin.
 FORECAST_LOOKBACK_DAYS = 400
+
+
+def json_safe(value):
+    """Plain JSON: NaN/inf -> None (Postgres JSONB rejects them), numpy -> Python."""
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, (np.floating, float)):
+        return float(value) if np.isfinite(value) else None
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def slug(text: str) -> str:
@@ -157,8 +172,8 @@ async def train_models(session: AsyncSession, commodity_id: int, state_id: int, 
             "target": f"log(modal_price[t+{slot.horizon}] / modal_price[t])",
             "interval": {"quantiles": INTERVAL, "log_error_quantiles": slot.interval},
         }
-        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        (folder / "metrics.json").write_text(json.dumps(slot.evaluation, indent=2, default=str), encoding="utf-8")
+        (folder / "metadata.json").write_text(json.dumps(json_safe(metadata), indent=2), encoding="utf-8")
+        (folder / "metrics.json").write_text(json.dumps(json_safe(slot.evaluation), indent=2), encoding="utf-8")
 
         await session.execute(
             update(PriceForecastModel)
@@ -183,7 +198,7 @@ async def train_models(session: AsyncSession, commodity_id: int, state_id: int, 
             mae=slot.pooled["mae"],
             rmse=slot.pooled["rmse"],
             mape=slot.pooled["mape"],
-            evaluation=json.loads(json.dumps(slot.evaluation, default=str)),
+            evaluation=json_safe(slot.evaluation),
             interval_low_log=slot.interval[0] if slot.interval else None,
             interval_high_log=slot.interval[1] if slot.interval else None,
             artifact_path=str(folder),
@@ -253,7 +268,7 @@ async def generate_forecasts(session: AsyncSession, commodity_id: int, state_id:
     for h, (meta, model) in loaded.items():
         if eligible.empty:
             break
-        pred_log = np.asarray(model.predict(eligible), dtype=float)
+        pred_log = bounded(model.predict(eligible))
         for (_, sample), log_ratio in zip(eligible.iterrows(), pred_log):
             base = float(sample["current_modal_price"])
             predicted = base * float(np.exp(log_ratio))

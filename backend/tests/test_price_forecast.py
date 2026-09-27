@@ -108,6 +108,28 @@ class TestValidation:
         m = ev.metrics(np.array([100.0, 200.0]), np.array([110.0, 180.0]))
         assert (m["mae"], m["rmse"], m["mape"]) == (15.0, round(float(np.sqrt(250)), 2), 10.0)
 
+    def test_non_finite_values_never_reach_metrics_or_storage(self) -> None:
+        # Regression: an extrapolating model once produced exp(huge) = inf,
+        # which Postgres JSONB rejected as "Infinity".
+        from app.ml.price_forecast.models import MAX_ABS_LOG_CHANGE, bounded
+        from app.ml.price_forecast.service import json_safe
+
+        capped = bounded([np.inf, -np.inf, np.nan, 40.0, 0.1])
+        assert list(capped) == [MAX_ABS_LOG_CHANGE, -MAX_ABS_LOG_CHANGE, 0.0, MAX_ABS_LOG_CHANGE, 0.1]
+        assert ev.metrics(np.array([100.0]), np.array([np.inf]))["mae"] is None
+        assert json_safe({"a": np.float64("inf"), "b": [np.nan, np.int64(3)], "c": np.float32(1.5)}) == {"a": None, "b": [None, 3], "c": 1.5}
+
+    def test_wild_extrapolation_is_capped_during_validation(self) -> None:
+        class Wild(Forecaster):
+            name, kind = "wild", "learned"
+
+            def predict(self, X):
+                return np.full(len(X), 50.0)  # exp(50) x today's price
+
+        ds = build_dataset(synthetic_daily(n_days=300))
+        result = ev.evaluate(ds, 7, model_classes=(NaiveModel, Wild))
+        assert np.isfinite(result.results["wild"].pooled["mae"]) and result.selected == "naive"
+
     def test_a_learned_model_must_beat_the_best_baseline(self) -> None:
         class Worse(Forecaster):
             name, kind = "worse", "learned"
@@ -175,7 +197,7 @@ class TestTrainAndForecast:
             metrics = json.loads((folder / "metrics.json").read_text())
             assert (folder / "model.pkl").exists()
             assert meta["model_name"] == m.model_name and meta["training_data"]["markets"] == 3
-            assert {"naive", "moving_average", "seasonal_naive", "ridge", "random_forest", "lightgbm"} <= set(metrics["models"])
+            assert {"naive", "moving_average", "seasonal_naive", "ridge", "random_forest", "lightgbm", "lightgbm_huber"} <= set(metrics["models"])
             assert m.mae is not None and m.interval_low_log < m.interval_high_log
 
         written = await generate_forecasts(session, commodity_id, state_id)
