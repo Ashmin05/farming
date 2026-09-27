@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.models.farm import Farm
 from app.models.user import User
 from app.repositories.farm_repository import FarmRepository
 from app.routers.satellite import run_background_refresh
@@ -23,8 +22,9 @@ def get_farm_service(session: AsyncSession = Depends(get_db)) -> FarmService:
 async def list_farms(
     current_user: User = Depends(get_current_user),
     farm_service: FarmService = Depends(get_farm_service),
-) -> list[Farm]:
-    return await farm_service.list_farms(current_user)
+) -> list[FarmResponse]:
+    farms = await farm_service.list_farms(current_user)
+    return [FarmResponse.from_farm(farm) for farm in farms]
 
 
 @router.post("", response_model=FarmResponse, status_code=status.HTTP_201_CREATED)
@@ -33,7 +33,7 @@ async def create_farm(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     farm_service: FarmService = Depends(get_farm_service),
-) -> Farm:
+) -> FarmResponse:
     try:
         farm = await farm_service.create_farm(
             current_user,
@@ -46,6 +46,7 @@ async def create_farm(
             state=payload.state,
             district=payload.district,
             address=payload.address,
+            soil_report=payload.soil_report,
         )
     except FarmError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -55,7 +56,7 @@ async def create_farm(
     # and a failure here (e.g. Earth Engine not configured) is silent --
     # see run_background_refresh.
     background_tasks.add_task(run_background_refresh, farm.id)
-    return farm
+    return FarmResponse.from_farm(farm)
 
 
 @router.get("/{farm_id}", response_model=FarmResponse)
@@ -63,11 +64,12 @@ async def get_farm(
     farm_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     farm_service: FarmService = Depends(get_farm_service),
-) -> Farm:
+) -> FarmResponse:
     try:
-        return await farm_service.get_farm(current_user, farm_id)
+        farm = await farm_service.get_farm(current_user, farm_id)
     except FarmNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
+    return FarmResponse.from_farm(farm)
 
 
 @router.patch("/{farm_id}", response_model=FarmResponse)
@@ -76,9 +78,9 @@ async def update_farm(
     payload: FarmUpdateRequest,
     current_user: User = Depends(get_current_user),
     farm_service: FarmService = Depends(get_farm_service),
-) -> Farm:
+) -> FarmResponse:
     try:
-        return await farm_service.update_farm(
+        farm = await farm_service.update_farm(
             current_user,
             farm_id,
             name=payload.name,
@@ -90,11 +92,13 @@ async def update_farm(
             state=payload.state,
             district=payload.district,
             address=payload.address,
+            soil_report=payload.soil_report,
         )
     except FarmNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Farm not found.") from exc
     except FarmError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return FarmResponse.from_farm(farm)
 
 
 @router.delete("/{farm_id}", status_code=status.HTTP_204_NO_CONTENT)

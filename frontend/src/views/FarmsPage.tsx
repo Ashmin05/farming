@@ -162,7 +162,8 @@ function RegisterFarmModal({
             ph: parseFloat(form.soil.ph) || undefined,
             nitrogen: form.soil.nitrogen as SoilLevel,
             phosphorus: form.soil.phosphorus as SoilLevel,
-            organicMatter: form.soil.organicMatter || undefined,
+            potassium: form.soil.potassium as SoilLevel,
+            organicMatter: form.soil.organicMatter ? `${form.soil.organicMatter}%` : undefined,
           }
         : undefined,
     };
@@ -464,6 +465,33 @@ function RegisterFarmModal({
                         <option value="Medium">Medium</option>
                         <option value="High">High</option>
                       </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-farm-muted block mb-0.5">
+                        Potassium (K)
+                      </label>
+                      <select
+                        value={form.soil.potassium}
+                        onChange={(e) => setSoil("potassium", e.target.value)}
+                        className="w-full px-2 py-1.5 border border-farm-border-color rounded-lg text-xs bg-white"
+                      >
+                        <option value="Low">Low</option>
+                        <option value="Medium">Medium</option>
+                        <option value="High">High</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-farm-muted block mb-0.5">
+                        Organic Matter (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder="e.g. 1.8"
+                        value={form.soil.organicMatter}
+                        onChange={(e) => setSoil("organicMatter", e.target.value)}
+                        className="w-full px-2.5 py-1.5 border border-farm-border-color rounded-lg text-xs bg-white"
+                      />
                     </div>
                   </div>
                 )}

@@ -42,6 +42,13 @@ class FarmRepository:
         state: str | None,
         district: str | None,
         address: str | None,
+        has_soil_report: bool = False,
+        soil_report_ph: float | None = None,
+        soil_report_nitrogen: str | None = None,
+        soil_report_phosphorus: str | None = None,
+        soil_report_potassium: str | None = None,
+        soil_report_organic_matter_pct: float | None = None,
+        soil_report_recorded_at=None,
     ) -> Farm:
         farm = Farm(
             user_id=user_id,
@@ -57,6 +64,13 @@ class FarmRepository:
             state=state,
             district=district,
             address=address,
+            has_soil_report=has_soil_report,
+            soil_report_ph=soil_report_ph,
+            soil_report_nitrogen=soil_report_nitrogen,
+            soil_report_phosphorus=soil_report_phosphorus,
+            soil_report_potassium=soil_report_potassium,
+            soil_report_organic_matter_pct=soil_report_organic_matter_pct,
+            soil_report_recorded_at=soil_report_recorded_at,
         )
         self.session.add(farm)
         await self.session.commit()

@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
 import { getUserId } from "@/lib/auth/auth-client";
-import { listFarms, createFarm, deleteFarm, type BackendFarm } from "@/lib/api/farms-client";
+import { listFarms, createFarm, deleteFarm, type BackendFarm, type SoilReportInput } from "@/lib/api/farms-client";
 import type { SatelliteObservation } from "@/lib/api/satellite-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -130,11 +130,12 @@ export type FarmDraft = {
   irrigationMethod?: string | null;
   center: [number, number]; // [lng, lat]
   polygonGeoJson: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
-  // Optional real soil report values from the registration wizard's "I have
-  // a Soil Health Card" step — used instead of the generated defaults below
-  // when present. Soil isn't backed by a real service yet, so this is the
-  // one domain module a farmer can enter honestly-known values for.
-  soilOverride?: Partial<Pick<FarmSoil, "ph" | "nitrogen" | "phosphorus" | "organicMatter">>;
+  // Real soil report values from the registration wizard's "I have a Soil
+  // Health Card / Lab Test Report" step. When present, this is the farm's
+  // authoritative soil reading -- saved to the backend and used instead of
+  // the generated defaults below and instead of the OpenLandMap satellite
+  // estimate (see EnvironmentReportCard / GET /farms/{id}/environment).
+  soilOverride?: Partial<Pick<FarmSoil, "ph" | "nitrogen" | "phosphorus" | "potassium" | "organicMatter">>;
 };
 
 // Fills in the demo/mock domain modules (yield, soil, water, weather,
@@ -170,7 +171,7 @@ export function enrichFarmDraft(id: string, draft: FarmDraft, areaAcres: number)
       ph: draft.soilOverride?.ph ?? 6.8,
       nitrogen: draft.soilOverride?.nitrogen ?? "Medium",
       phosphorus: draft.soilOverride?.phosphorus ?? "Medium",
-      potassium: "Medium",
+      potassium: draft.soilOverride?.potassium ?? "Medium",
       organicMatter: draft.soilOverride?.organicMatter ?? "2.1%",
       moisturePercent: 30,
       healthRating: "Optimal",
@@ -268,6 +269,16 @@ function backendFarmToFarm(b: BackendFarm): Farm {
     irrigationMethod: b.irrigation_method,
     center: [b.centroid_lng, b.centroid_lat],
     polygonGeoJson: { type: "Feature", properties: {}, geometry: b.polygon_geojson },
+    soilOverride: b.soil_report
+      ? {
+          ph: b.soil_report.ph ?? undefined,
+          nitrogen: b.soil_report.nitrogen ?? undefined,
+          phosphorus: b.soil_report.phosphorus ?? undefined,
+          potassium: b.soil_report.potassium ?? undefined,
+          organicMatter:
+            b.soil_report.organic_matter_pct !== null ? `${b.soil_report.organic_matter_pct}%` : undefined,
+        }
+      : undefined,
   };
   const areaAcres = Math.round(b.area_ha * 2.47105 * 100) / 100;
   return enrichFarmDraft(b.id, draft, areaAcres);
@@ -615,6 +626,17 @@ export function useFarmStore() {
       const geometry = draft.polygonGeoJson?.geometry;
       if (!geometry) throw new Error("Draw a field boundary before saving.");
 
+      const soil = draft.soilOverride;
+      const soilReport: SoilReportInput | undefined = soil
+        ? {
+            ph: soil.ph ?? null,
+            nitrogen: soil.nitrogen ?? null,
+            phosphorus: soil.phosphorus ?? null,
+            potassium: soil.potassium ?? null,
+            organic_matter_pct: soil.organicMatter ? parseFloat(soil.organicMatter) || null : null,
+          }
+        : undefined;
+
       const backendFarm = await createFarm({
         name: draft.name,
         crop: draft.crop,
@@ -625,6 +647,7 @@ export function useFarmStore() {
         state: draft.state || null,
         district: draft.district || null,
         address: draft.address || null,
+        soil_report: soilReport,
       });
       await queryClient.invalidateQueries({ queryKey: ["farms", userId] });
       return backendFarmToFarm(backendFarm);

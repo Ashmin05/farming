@@ -1,9 +1,11 @@
 import uuid
+from datetime import datetime, timezone
 
 from app.core.geometry import InvalidPolygonError, compute_polygon_metrics
 from app.models.farm import Farm
 from app.models.user import User
 from app.repositories.farm_repository import FarmRepository
+from app.schemas.farm import SoilReportIn
 
 
 class FarmError(Exception):
@@ -18,6 +20,24 @@ class FarmNotFoundError(Exception):
     can't be enumerated by noticing a different status code for "not yours"
     versus "doesn't exist" — same anti-enumeration principle used for login.
     """
+
+
+def _soil_report_fields(soil_report: SoilReportIn | None) -> dict:
+    """Farm-row columns for a submitted soil report, or {} when none was
+    given -- callers merge this into farm_repository.create/update kwargs.
+    A given report always wins: it's the authoritative reading, not a hint
+    to blend with the OpenLandMap estimate."""
+    if soil_report is None:
+        return {}
+    return {
+        "has_soil_report": True,
+        "soil_report_ph": soil_report.ph,
+        "soil_report_nitrogen": soil_report.nitrogen,
+        "soil_report_phosphorus": soil_report.phosphorus,
+        "soil_report_potassium": soil_report.potassium,
+        "soil_report_organic_matter_pct": soil_report.organic_matter_pct,
+        "soil_report_recorded_at": datetime.now(timezone.utc),
+    }
 
 
 class FarmService:
@@ -46,6 +66,7 @@ class FarmService:
         state: str | None,
         district: str | None,
         address: str | None,
+        soil_report: SoilReportIn | None = None,
     ) -> Farm:
         if not (user.phone and user.state):
             raise FarmError(
@@ -71,6 +92,7 @@ class FarmService:
             state=state,
             district=district,
             address=address,
+            **_soil_report_fields(soil_report),
         )
 
     async def update_farm(
@@ -87,6 +109,7 @@ class FarmService:
         state: str | None = None,
         district: str | None = None,
         address: str | None = None,
+        soil_report: SoilReportIn | None = None,
     ) -> Farm:
         farm = await self.get_farm(user, farm_id)
 
@@ -116,6 +139,7 @@ class FarmService:
             state=state,
             district=district,
             address=address,
+            **_soil_report_fields(soil_report),
         )
 
     async def delete_farm(self, user: User, farm_id: uuid.UUID) -> None:

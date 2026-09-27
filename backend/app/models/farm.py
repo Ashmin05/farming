@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, String, Uuid
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -39,6 +39,20 @@ class Farm(Base):
     state: Mapped[str | None] = mapped_column(String(100), nullable=True)
     district: Mapped[str | None] = mapped_column(String(100), nullable=True)
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Farmer-submitted Soil Health Card / lab test report, entered at
+    # registration. When present this is the authoritative soil reading for
+    # the farm -- it takes priority over the OpenLandMap satellite estimate
+    # (see SatelliteService.refresh_environment) rather than being replaced
+    # by it. When has_soil_report is False, no lab values were given and the
+    # OpenLandMap estimate is used instead.
+    has_soil_report: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    soil_report_ph: Mapped[float | None] = mapped_column(Float, nullable=True)
+    soil_report_nitrogen: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    soil_report_phosphorus: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    soil_report_potassium: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    soil_report_organic_matter_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    soil_report_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

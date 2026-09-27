@@ -353,7 +353,11 @@ class SatelliteService:
 
         existing = await self.environment_snapshot_repository.get_by_farm(farm.id)
         soil = None
-        if existing is None or existing.soil_fetched_at is None:
+        # A farmer-submitted Soil Health Card / lab report is authoritative
+        # (see Farm.has_soil_report) -- never spend an OpenLandMap call
+        # fetching an estimate that would just be overridden anyway (see
+        # _environment_snapshot_to_response, which prefers the lab report).
+        if not farm.has_soil_report and (existing is None or existing.soil_fetched_at is None):
             try:
                 soil = await self.earth_engine_client.get_soil_properties(farm.polygon_geojson)
             except (EarthEngineNotConfiguredError, EarthEngineTimeoutError, EarthEngineRequestError) as exc:
