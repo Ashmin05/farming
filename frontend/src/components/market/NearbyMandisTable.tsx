@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, MapPin } from "lucide-react";
 import type { NearbyMarket } from "@/lib/api/market-client";
 import { changeClass, longDate, pct, rupees, TREND_META } from "./format";
@@ -36,6 +36,8 @@ export default function NearbyMandisTable({
   today: string;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "distance", dir: 1 });
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => setShowAll(false), [markets]);
 
   const rows = useMemo(() => {
     const value = (m: NearbyMarket): number | null => {
@@ -57,6 +59,15 @@ export default function NearbyMandisTable({
 
   const toggle = (key: SortKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "distance" ? 1 : -1 }));
+
+  const LIMIT = 3;
+  const displayRows = useMemo(() => {
+    if (showAll || rows.length <= LIMIT) return rows;
+    const bestRow = rows.find((m) => m.market_id === bestMarketId);
+    const rest = bestRow ? rows.filter((m) => m.market_id !== bestMarketId) : rows;
+    return bestRow ? [bestRow, ...rest.slice(0, LIMIT - 1)] : rows.slice(0, LIMIT);
+  }, [rows, showAll, bestMarketId]);
+  const hiddenCount = rows.length - displayRows.length;
 
   const SortButton = ({ k, label }: { k: SortKey; label: string }) => {
     const active = sort.key === k;
@@ -89,7 +100,7 @@ export default function NearbyMandisTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((m) => {
+          {displayRows.map((m) => {
             const trend = TREND_META[m.trend];
             const stale = (Date.parse(today) - Date.parse(m.as_of)) / 86_400_000 > staleAfterDays;
             const selected = m.market_id === selectedMarketId;
@@ -135,6 +146,15 @@ export default function NearbyMandisTable({
           })}
         </tbody>
       </table>
+      {rows.length > LIMIT && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="mt-2 text-xs font-semibold text-farm-green hover:text-farm-green-dark"
+        >
+          {showAll ? "Show less" : `See ${hiddenCount} more mandi${hiddenCount === 1 ? "" : "s"}`}
+        </button>
+      )}
     </div>
   );
 }
