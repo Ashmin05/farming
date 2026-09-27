@@ -6,25 +6,39 @@
 // Route URL: /satellite
 // App Router Entry: src/app/satellite/page.tsx
 // Features:
-// - Multispectral layer toggling: NDVI (Vegetation), NDWI (Water), True Color, Stress Zones
+// - Multispectral layer toggling: NDVI (Vegetation), NDWI (Water), EVI, True Color, Stress Zones
+// - Date slider over every available clear pass — swaps the map's tile layers
 // - Quantitative NDVI statistics (Mean, Min, Max, % Canopy Health Distribution)
-// - NDVI Historical Trend Graph + Canopy Health Distribution donut
-// - Field Stress-Zone diagnostic report
-// - Real Sentinel-2 data for real farms (useFarmSatelliteAnalysis), demo data for guests
+// - NDVI season curve (SeasonCurveChart) + Canopy Health Distribution donut
+// - Field Stress-Zone diagnostic report + field environment (rain/heat/soil)
+// - Signed-in users' real farms: live data via TanStack Query hooks
+//   (/satellite/latest, /timeseries, /layers, /environment), with loading /
+//   empty / error states. Guests keep demo data, labelled as such.
+// - Every satellite number carries a SourceBadge ("Live — Sentinel-2, 20 Sep, cloud 0.3%")
 // ==============================================================================
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
 import MapView from "@/components/map/MapView";
+import SourceBadge, { formatPassDate, LiveSource } from "@/components/SourceBadge";
 import { useFarmStore, applyLiveSatellite } from "@/lib/stores/farmStore";
 import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import { useFarmSatelliteLayers } from "@/lib/hooks/useFarmSatelliteLayers";
-import SatelliteAnalyticsPanel, { SatelliteMapLayer } from "@/components/satellite/SatelliteAnalyticsPanel";
+import { useFarmSatelliteTimeseries } from "@/lib/hooks/useFarmSatelliteTimeseries";
+import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
+import SatelliteAnalyticsPanel, {
+  PanelStressZone,
+  SatelliteMapLayer,
+} from "@/components/satellite/SatelliteAnalyticsPanel";
+import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
+import PassDateSlider, { SatellitePass } from "@/components/satellite/PassDateSlider";
+import EnvironmentReportCard from "@/components/satellite/EnvironmentReportCard";
+import type { SeasonCurvePoint } from "@/components/charts/SeasonCurveChart";
 import {
   MapPin, Satellite, Droplets, Camera, AlertTriangle, Leaf,
-  ChevronLeft, ChevronDown, Plus, RefreshCw, BadgeCheck, Loader2, Calendar
+  ChevronLeft, ChevronDown, Plus, RefreshCw, Loader2, Calendar
 } from "lucide-react";
 
 const TILE_KEY_BY_LAYER: Record<SatelliteMapLayer, "true_color" | "ndvi" | "ndwi" | "evi" | "stress"> = {
@@ -51,6 +65,13 @@ const LAYER_CAPTIONS: Record<SatelliteMapLayer, string> = {
   stress: "Automated classification of the field into healthy, moderate, and stressed vegetation zones.",
 };
 
+const ZONE_TYPE_LABELS: Record<string, string> = {
+  water_stress: "Water Stress",
+  nutrient_pest_suspected: "Nutrient / Pest",
+};
+
+const HA_TO_ACRES = 2.47105;
+
 // ── Satellite View Inner with Search Params ───────────────────────────────────
 
 function SatelliteContent() {
@@ -61,6 +82,8 @@ function SatelliteContent() {
 
   const [selectedId, setSelectedId] = useState<string>(farms[0]?.id || "farm-1");
   const [activeLayer, setActiveLayer] = useState<SatelliteMapLayer>("ndvi");
+  // null = follow the latest analysis; otherwise a pass date picked on the slider/chart.
+  const [selectedPass, setSelectedPass] = useState<string | null>(null);
 
   useEffect(() => {
     if (farmParam && farms.some((f) => f.id === farmParam)) {
@@ -68,21 +91,39 @@ function SatelliteContent() {
     }
   }, [farmParam, farms]);
 
+  useEffect(() => {
+    setSelectedPass(null);
+  }, [selectedId]);
+
   const selectedFarm = farms.find((f) => f.id === selectedId) || farms[0];
 
   const {
     isRealFarm,
+    status,
     observation,
-    isLoading: satelliteLoading,
+    error: analysisError,
+    retry: retryAnalysis,
     isRefreshing,
     refreshError,
     refresh: refreshSatellite,
   } = useFarmSatelliteAnalysis(selectedFarm?.id);
 
-  const {
-    layers,
-    isLoading: layersLoading,
-  } = useFarmSatelliteLayers(selectedFarm?.id, observation?.provenance.as_of);
+  const timeseries = useFarmSatelliteTimeseries(selectedFarm?.id);
+  const environment = useFarmEnvironment(selectedFarm?.id);
+
+  // Every known clear pass (nightly timeseries + the latest analysis, which
+  // may be newer than tonight's job has recorded), oldest first.
+  const passes = useMemo<SatellitePass[]>(() => {
+    const byDate = new Map<string, SatellitePass>();
+    for (const p of timeseries.points) byDate.set(p.image_date, { date: p.image_date, cloudPct: p.cloud_pct });
+    if (observation) byDate.set(observation.image_date, { date: observation.image_date, cloudPct: observation.cloud_pct });
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [timeseries.points, observation]);
+
+  const mapDate = selectedPass ?? observation?.image_date;
+  const mapPass = passes.find((p) => p.date === mapDate);
+
+  const { layers, isLoading: layersLoading } = useFarmSatelliteLayers(selectedFarm?.id, mapDate);
 
   // Until the real (per-account) farm list has loaded client-side, `farms`
   // is still the SSR-safe placeholder — render nothing rather than flash it.
@@ -106,19 +147,78 @@ function SatelliteContent() {
     );
   }
 
+  const isReady = isRealFarm && !!observation;
   const displaySatellite = observation
     ? applyLiveSatellite(selectedFarm.satellite, observation)
     : selectedFarm.satellite;
 
   const activeLayerMeta = LAYERS.find((l) => l.key === activeLayer)!;
-  const imagedDate = observation ? observation.provenance.as_of : displaySatellite.metadata.acquisitionDate;
 
-  const activeLayerMean =
-    activeLayer === "ndwi"
-      ? displaySatellite.ndwi
-      : activeLayer === "evi"
-      ? observation?.evi.mean ?? null
-      : displaySatellite.meanNdvi;
+  // Provenance of whatever pass the map is showing, and of the latest analysis.
+  const mapSource: LiveSource | null = mapPass
+    ? { source: "Sentinel-2", asOf: mapPass.date, cloudPct: mapPass.cloudPct }
+    : null;
+  const latestSource: LiveSource | null = observation
+    ? { source: "Sentinel-2", asOf: observation.image_date, cloudPct: observation.cloud_pct }
+    : null;
+
+  // Mean shown in the caption follows the pass on the map when it's a
+  // recorded timeseries pass; otherwise the latest analysis (or demo values).
+  const mapPoint = timeseries.points.find((p) => p.image_date === mapDate);
+  const activeLayerMean = isRealFarm
+    ? mapPoint && mapDate !== observation?.image_date
+      ? activeLayer === "ndwi"
+        ? mapPoint.ndwi_mean
+        : activeLayer === "evi"
+        ? mapPoint.evi_mean
+        : mapPoint.ndvi_mean
+      : observation
+      ? activeLayer === "ndwi"
+        ? observation.ndwi.mean
+        : activeLayer === "evi"
+        ? observation.evi.mean
+        : observation.ndvi.mean
+      : null
+    : activeLayer === "ndwi"
+    ? displaySatellite.ndwi
+    : activeLayer === "evi"
+    ? null
+    : displaySatellite.meanNdvi;
+
+  // ── Panel inputs: live for real farms, demo for guests ──
+  const seasonPoints: SeasonCurvePoint[] = isRealFarm
+    ? timeseries.points.map((p) => ({
+        key: p.image_date,
+        label: formatPassDate(p.image_date),
+        ndvi: p.ndvi_mean,
+        benchmark: p.benchmark_ndvi,
+        cloudPct: p.cloud_pct,
+      }))
+    : displaySatellite.history.map((p) => ({
+        key: p.date,
+        label: p.date,
+        ndvi: p.ndvi,
+        benchmark: p.benchmark,
+        stage: p.stage,
+      }));
+  const latestSeasonPoint = timeseries.points[timeseries.points.length - 1];
+
+  const stressZoneItems: PanelStressZone[] = isRealFarm
+    ? (layers?.stress_zones ?? []).map((zone, idx) => ({
+        id: zone.id,
+        name: `Zone ${idx + 1}`,
+        typeLabel: ZONE_TYPE_LABELS[zone.zone_type] ?? zone.zone_type,
+        areaAcres: Math.round(zone.area_ha * HA_TO_ACRES * 100) / 100,
+        action: zone.suggested_action,
+      }))
+    : displaySatellite.stressZones.map((zone) => ({
+        id: zone.id,
+        name: zone.name,
+        typeLabel: zone.type,
+        areaAcres: zone.areaAcres,
+        description: zone.description,
+        action: zone.actionRequired,
+      }));
 
   return (
     <div className="max-w-5xl mx-auto space-y-5 pb-16">
@@ -200,15 +300,15 @@ function SatelliteContent() {
         />
 
         {/* Live raster layer loading indicator */}
-        {isRealFarm && layersLoading && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-slate-900/85 backdrop-blur-sm text-white px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg">
+        {layersLoading && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-slate-900/85 backdrop-blur-sm text-white px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             Loading satellite imagery…
           </div>
         )}
 
         {/* Location badge (top-left) */}
-        <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-3.5 py-2 shadow-md flex items-center gap-2 max-w-[75%]">
+        <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-3.5 py-2 shadow-md flex items-center gap-2 max-w-[60%]">
           <MapPin className="w-4 h-4 text-farm-green flex-shrink-0" />
           <div className="min-w-0">
             <p className="text-xs font-bold text-farm-dark truncate">{selectedFarm.name}</p>
@@ -218,10 +318,21 @@ function SatelliteContent() {
           </div>
         </div>
 
-        {/* Date badge (top-right) */}
-        <div className="absolute top-4 right-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-3 py-1.5 shadow-md flex items-center gap-1.5 text-xs font-semibold text-farm-dark">
-          <Calendar className="w-3.5 h-3.5 text-farm-green flex-shrink-0" />
-          Sentinel-2 · {imagedDate}
+        {/* Pass / source badge (top-right) */}
+        <div className="absolute top-4 right-4 z-10 bg-white/95 backdrop-blur-sm rounded-xl px-2 py-1.5 shadow-md">
+          {isRealFarm ? (
+            mapSource ? (
+              <SourceBadge live={mapSource} />
+            ) : (
+              <span className="text-xs font-semibold text-farm-muted px-1">No imagery yet</span>
+            )
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-farm-dark px-1">
+              <Calendar className="w-3.5 h-3.5 text-farm-green flex-shrink-0" />
+              Sentinel-2 · {displaySatellite.metadata.acquisitionDate}
+              <SourceBadge demo />
+            </span>
+          )}
         </div>
 
         {/* Legend (bottom-right) */}
@@ -253,11 +364,21 @@ function SatelliteContent() {
         )}
       </div>
 
+      {/* ── Pass-date slider (swaps the map layers) ── */}
+      {isReady && mapDate && (
+        <PassDateSlider
+          passes={passes}
+          value={mapDate}
+          onChange={(date) => setSelectedPass(date === observation?.image_date ? null : date)}
+          isLoading={layersLoading}
+        />
+      )}
+
       {/* Real stress-zone count + click hint (only when there's something to click) */}
       {activeLayer === "stress" && layers && layers.stress_zones.length > 0 && (
         <p className="text-xs text-farm-muted px-1 -mt-2">
           {layers.stress_zones.length} stress {layers.stress_zones.length === 1 ? "zone" : "zones"} detected
-          from live Sentinel-2 data — click an outlined area on the map for details.
+          on this pass — click an outlined area on the map for details.
         </p>
       )}
 
@@ -269,60 +390,89 @@ function SatelliteContent() {
             {activeLayerMeta.label} Index
             {activeLayerMean !== null && ` (Mean: ${activeLayerMean.toFixed(2)})`}
           </strong>{" "}
+          {activeLayerMean !== null && (
+            <span className="inline-block align-middle mr-1">
+              {isRealFarm ? mapSource && <SourceBadge live={mapSource} /> : <SourceBadge demo />}
+            </span>
+          )}
           {LAYER_CAPTIONS[activeLayer]}
         </p>
       </div>
 
-      {/* ── Live Sentinel-2 Status Banner (real farms only) ── */}
-      {isRealFarm && (
-        <div
-          className={`rounded-2xl border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-            observation ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"
-          }`}
-        >
-          <div className="flex items-center gap-2.5 text-xs">
-            {satelliteLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 text-farm-muted animate-spin" />
-                <span className="text-farm-muted font-medium">Checking for a live Sentinel-2 analysis…</span>
-              </>
-            ) : observation ? (
-              <>
-                <BadgeCheck className="w-4 h-4 text-emerald-700 flex-shrink-0" />
-                <span className="text-emerald-900">
-                  <strong>Live Sentinel-2 data</strong> · {observation.satellite} · imaged{" "}
-                  {observation.provenance.as_of} · {observation.cloud_pct.toFixed(0)}% cloud
-                  {observation.is_fallback && " (best available — no clear scene this window)"}
+      {isRealFarm && !isReady ? (
+        /* ── First analysis running / no clear image / error ── */
+        <SatelliteStatusState status={status} error={analysisError} onRetry={retryAnalysis} />
+      ) : (
+        <>
+          {/* ── Live Sentinel-2 status banner (real farms only) ── */}
+          {isRealFarm && observation && latestSource && (
+            <div className="rounded-2xl border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-emerald-50 border-emerald-200">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-900">
+                <strong>Latest analysis</strong>
+                <SourceBadge live={latestSource} />
+                <span>
+                  Health score <strong>{observation.health_score.toFixed(0)}/100</strong>
                 </span>
-              </>
-            ) : (
-              <>
-                <AlertTriangle className="w-4 h-4 text-amber-700 flex-shrink-0" />
-                <span className="text-amber-900">
-                  No live analysis yet for this farm — showing demo values until one runs.
-                </span>
-              </>
-            )}
-          </div>
-          <button
-            onClick={refreshSatellite}
-            disabled={isRefreshing}
-            className="self-start sm:self-auto px-3 py-1.5 bg-white border border-farm-border-color hover:border-farm-green text-xs font-semibold rounded-lg text-farm-dark hover:text-farm-green transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-            {isRefreshing ? "Running analysis…" : observation ? "Refresh from Sentinel-2" : "Run Sentinel-2 Analysis"}
-          </button>
-        </div>
-      )}
-      {refreshError && <p className="text-xs text-red-600">{refreshError}</p>}
+                {observation.is_fallback && (
+                  <span className="text-amber-800">(best available — no clear scene this window)</span>
+                )}
+              </div>
+              <button
+                onClick={refreshSatellite}
+                disabled={isRefreshing}
+                className="self-start sm:self-auto px-3 py-1.5 bg-white border border-farm-border-color hover:border-farm-green text-xs font-semibold rounded-lg text-farm-dark hover:text-farm-green transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed flex-shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                {isRefreshing ? "Analysing… ~30 s" : "Refresh from Sentinel-2"}
+              </button>
+            </div>
+          )}
+          {refreshError && <p className="text-xs text-red-600">{refreshError}</p>}
 
-      {/* ── Comprehensive Satellite Analytics Panel ── */}
-      <SatelliteAnalyticsPanel
-        crop={selectedFarm.crop}
-        areaAcres={selectedFarm.areaAcres}
-        satellite={displaySatellite}
-        isLive={!!observation}
-      />
+          {/* ── Comprehensive Satellite Analytics Panel ── */}
+          <SatelliteAnalyticsPanel
+            areaAcres={selectedFarm.areaAcres}
+            satellite={displaySatellite}
+            statsBadge={latestSource ? <SourceBadge live={latestSource} /> : <SourceBadge demo />}
+            seasonCurve={{
+              points: seasonPoints,
+              badge: !isRealFarm ? (
+                <SourceBadge demo />
+              ) : latestSeasonPoint ? (
+                <SourceBadge
+                  live={{
+                    source: "Sentinel-2",
+                    asOf: latestSeasonPoint.image_date,
+                    cloudPct: latestSeasonPoint.cloud_pct,
+                  }}
+                />
+              ) : null,
+              emptyMessage: timeseries.isLoading
+                ? "Loading season curve…"
+                : "Your season curve builds up as the nightly job records each clear pass — the first points appear after tonight's run.",
+              selectedKey: isRealFarm ? mapDate : undefined,
+              onSelectPoint: isRealFarm
+                ? (point) => setSelectedPass(point.key === observation?.image_date ? null : point.key)
+                : undefined,
+            }}
+            stressZones={{
+              items: stressZoneItems,
+              badge: isRealFarm ? mapSource && <SourceBadge live={mapSource} /> : <SourceBadge demo />,
+              isLoading: isRealFarm && layersLoading,
+            }}
+          />
+
+          {/* ── Field environment (real farms only — guests have no demo equivalent) ── */}
+          {isRealFarm && (
+            <EnvironmentReportCard
+              report={environment.report}
+              isLoading={environment.isLoading}
+              isError={environment.isError}
+              onRetry={() => environment.retry()}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

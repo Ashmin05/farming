@@ -10,6 +10,7 @@ FastAPI event loop for every other request.
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -278,13 +279,15 @@ def _suggested_action(zone_type: str) -> str:
 
 
 def _short_satellite_name(spacecraft_name: str | None) -> str:
+    """"Sentinel-2A" -> "S2A", and likewise for any unit (2B, 2C -- in
+    operation since 2025 -- 2D, ...). Always fits the String(10) `satellite`
+    columns: an unrecognised name is truncated rather than failing the insert."""
     if not spacecraft_name:
         return "S2"
-    if "2A" in spacecraft_name:
-        return "S2A"
-    if "2B" in spacecraft_name:
-        return "S2B"
-    return spacecraft_name
+    match = re.search(r"2([A-Z])\b", spacecraft_name.upper())
+    if match:
+        return f"S2{match.group(1)}"
+    return spacecraft_name[:10]
 
 
 class EarthEngineClient:
@@ -734,8 +737,12 @@ class EarthEngineClient:
             scale=REGION_REDUCE_SCALE_M,
             bestEffort=True,
         )
-        mean_ndvi = ee.Number(ndvi_stats.get("NDVI_mean"))
-        std_ndvi = ee.Number(ndvi_stats.get("NDVI_stdDev"))
+        # Both are null when every field pixel is cloud-masked on this pass
+        # (possible for any date the UI's pass slider asks for) -- default to
+        # 0 so the tiles still build (fully transparent over the field)
+        # instead of Earth Engine raising "Number.multiply: ... null".
+        mean_ndvi = ee.Number(ee.Algorithms.If(ndvi_stats.get("NDVI_mean"), ndvi_stats.get("NDVI_mean"), 0))
+        std_ndvi = ee.Number(ee.Algorithms.If(ndvi_stats.get("NDVI_stdDev"), ndvi_stats.get("NDVI_stdDev"), 0))
         stress_threshold = mean_ndvi.subtract(std_ndvi.multiply(STRESS_ZONE_STD_DEV_THRESHOLD))
 
         stressed_mask = ndvi.lt(stress_threshold)

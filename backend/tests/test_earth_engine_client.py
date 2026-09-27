@@ -11,7 +11,20 @@ from app.integrations.earth_engine_client import (
     EarthEngineClient,
     EarthEngineNotConfiguredError,
     NoSentinelImageryAvailableError,
+    _short_satellite_name,
 )
+
+
+class TestShortSatelliteName:
+    @pytest.mark.parametrize(
+        ("spacecraft", "expected"),
+        [("Sentinel-2A", "S2A"), ("Sentinel-2B", "S2B"), ("Sentinel-2C", "S2C"), (None, "S2")],
+    )
+    def test_maps_every_sentinel_2_unit(self, spacecraft, expected) -> None:
+        assert _short_satellite_name(spacecraft) == expected
+
+    def test_unrecognised_name_fits_the_string_10_column(self) -> None:
+        assert len(_short_satellite_name("Some-Future-Satellite")) <= 10
 
 
 def _unconfigured_client() -> EarthEngineClient:

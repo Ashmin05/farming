@@ -29,7 +29,8 @@ future geospatial work on field boundaries).
 This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `profile_setup`,
 `profile_fixes`, `farm-backend`, `earth-engine`, `satellite-analysis`, `satellite-frontend`,
 `satellite-timeseries-alerts`, `redesign-dashboard-satellite-ui`, `satellite-map-tiles-stress-zones`,
-`farm-environment-report`) were used during buildout and have all been merged into `main`, which is
+`farm-environment-report`, `environment-nightly-refresh`, `new-frontend`) were used during buildout
+and have all been merged into `main`, which is
 what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
@@ -66,6 +67,12 @@ what's pushed to origin and described by this document. Notable merged work, rou
   (CHIRPS), land-surface temperature (MODIS), soil moisture (SMAP, regional), and static soil
   properties (OpenLandMap: pH, organic carbon, USDA texture class), each carrying its own
   provenance and native resolution (§5.11). Backend-only so far, same as §5.6 before §5.7 existed.
+- `new-frontend` — replaces the remaining mock data on the Satellite page and the Dashboard's
+  health/NDVI cards with TanStack Query hooks over the real endpoints (`/satellite/latest`,
+  `/timeseries`, `/layers`, `/environment`, `/alerts`) for signed-in users' farms, adds a Recharts
+  season-curve chart, a pass-date slider that swaps the map layers, a `SourceBadge` on every
+  satellite number, loading/empty/error states, and a Dashboard alerts strip with mark-as-read
+  (§5.12). Found and fixed two real backend bugs that only live testing surfaced (§5.12).
 - Assorted small UI passes since: removed the "Ask KrishiBot" button from the home hero, gated
   the KrishiBot AI chat behind sign-in (§6.8), added a glassmorphism background to Login/Register
   (§4.4).
@@ -78,7 +85,9 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - Next.js 14 (App Router), React 18, TypeScript
 - Tailwind CSS + shadcn/ui components (`@base-ui/react`, `class-variance-authority`)
 - Mapbox GL + `@mapbox/mapbox-gl-draw` + `@turf/turf` — interactive satellite maps, field boundary drawing, area calculations
-- `@tanstack/react-query` — server-state caching for the (currently mock) data hooks
+- `@tanstack/react-query` — server-state caching: the real satellite/environment/alerts hooks
+  (§5.12) plus the (still mock) generic data hooks
+- `recharts` — the NDVI season-curve chart (`components/charts/SeasonCurveChart.tsx`, §5.12)
 - `lucide-react` — icons
 
 **Backend**
@@ -267,7 +276,7 @@ backend/
 │   │   └── scheduler.py   # APScheduler nightly jobs: timeseries+alerts (§5.9), environment (§5.11)
 │   └── main.py             # FastAPI app, CORS, router registration, Earth Engine + scheduler startup
 ├── alembic/                 # versioned DB migrations
-└── tests/                   # pytest suite (async, in-memory SQLite) — 119 tests
+└── tests/                   # pytest suite (async, in-memory SQLite) — 126 tests
 ```
 
 This is a classic layered architecture: **routers** (HTTP layer) → **services** (business logic)
@@ -446,10 +455,9 @@ real (backend-persisted) farms:
   for them, so no error, no loading state, nothing.
 - **`applyLiveSatellite()`** (`farmStore.ts`) overlays a real `SatelliteObservation` onto a farm's
   synthetic `FarmSatellite` — but **only the current-stats fields** (NDVI/NDWI mean/min/max, canopy
-  health %, vigour label, mission/cloud/quality metadata). The historical trend graph and stress
-  zones stay synthetic, since the backend doesn't compute those yet, and are now explicitly labeled
-  **"Demo trend"** / **"Demo"** in the UI (`SatelliteAnalyticsPanel`'s `isLive` prop) so the mix of
-  real and demo data on one page is never presented as more real than it is.
+  health %, vigour label, mission/cloud/quality metadata). *(At the time, the historical trend
+  graph and stress zones stayed synthetic with a "Demo trend" / "Demo" tag; both are real now —
+  see §5.12.)*
 - The Satellite page shows a status banner for real farms: a loading state while checking,
   "Live Sentinel-2 data · S2A/S2B · imaged \<date\> · \<cloud %\>%" (plus a fallback-scene note when
   applicable) once an observation exists, or "No live analysis yet" with a **"Run Sentinel-2
@@ -475,16 +483,12 @@ these, since they only exercise the `_get_info` boundary, not real Earth Engine 
 
 ### 5.8 What's still not done
 
-Soil pH/N-P-K and weather stay fully synthetic — not satellite-derived at all, would need either
-more Earth Engine layers (soil moisture is feasible; N-P-K is not remotely sensed) or a different
-data source entirely. NDWI/EVI/NDMI are computed and stored (§5.6) and now available via the API,
-but only NDVI and the canopy health % breakdown are currently surfaced in the UI (§5.7) — NDWI has
-a "Water" map layer button already in `SatelliteAnalyticsPanel` but it still shows the map, not a
-real moisture value breakdown card the way NDVI does. Stress-zone detection (per-pixel, not
-field-mean, NDVI) remains synthetic. The historical NDVI trend graph is still synthetic **in the
-UI** (`SatelliteAnalyticsPanel`'s "Demo trend" tag, §5.7) even though real historical data now
-exists server-side as of §5.9 below — wiring the graph to `GET /farms/{id}/satellite/timeseries`
-instead of `enrichFarmDraft()`'s synthetic points is the natural next frontend step.
+*(Historical note — this was the gap list right after §5.7. Most of it has since been closed: the
+timeseries (§5.9), real stress zones and map layers (§5.10), soil pH/organic carbon/texture and
+soil moisture (§5.11), and wiring all of it into the UI (§5.12).)* What remains synthetic even for
+signed-in users: **soil N-P-K** (not remotely sensed — needs a soil test or a different data
+source) and **weather** (no weather API is integrated; `WEATHER_API_KEY` is reserved but unused).
+NDMI is computed and stored (§5.6) but not surfaced in the UI.
 
 ### 5.9 NDVI/NDWI/EVI timeseries, benchmark alerts, and the nightly scheduler job
 
@@ -530,8 +534,7 @@ anomalies automatically, instead of only ever showing "right now":
   alert's farm (an alert has no `user_id` of its own) with the same 404-never-403
   anti-enumeration pattern used throughout `/farms`.
 - New dependency: **`apscheduler`** (added to `requirements.txt`).
-- Not yet wired into the frontend — same status as §5.6 was before §5.7 existed. `GET .../timeseries`
-  and `GET .../alerts` are real, working endpoints, but nothing in the UI calls them yet.
+- Wired into the frontend in §5.12 (season-curve chart, pass-date slider, Dashboard alerts strip).
 
 ### 5.10 Map tiles (true colour / NDVI / NDWI / EVI / stress) and stress-zone vectorization
 
@@ -649,7 +652,74 @@ Engine datasets, each with a very different native resolution and update cadence
   Values for the test farm: 8.8mm/36.4mm/507.4mm rainfall over 7/30/90 days (plausible for peak
   Maharashtra monsoon season), 25.2°C mean LST with 0 hot periods, 0.455 m³/m³ soil moisture (dated
   2025-06-27, correctly surfaced as stale), and pH 7.4 / 10.0 g/kg organic carbon / "Clay" texture.
-- Not yet wired into the frontend — same status as §5.6 was before §5.7 existed, and §5.9 still is.
+- Wired into the frontend in §5.12.
+
+### 5.12 Frontend on real data: season curve, pass slider, source badges, alerts (`new-frontend`)
+
+For a signed-in user's real (backend-UUID) farm, the Satellite page and the Dashboard's health/NDVI
+cards no longer show any synthetic satellite values. Guests keep the demo farms, now explicitly
+labelled with a **"Demo data"** badge. Guest farm ids never hit the network (`isRealFarmId()`, §5.7).
+
+**TanStack Query hooks** (`src/lib/hooks/`), all over `src/lib/api/satellite-client.ts`:
+
+| Hook | Endpoint | Notes |
+| :--- | :--- | :--- |
+| `useFarmSatelliteAnalysis` | `/satellite/latest` (+ `/satellite/refresh`) | Exposes a `status`: `guest` / `checking` / `analysing` / `ready` / `no-imagery` / `error`, plus `retry` |
+| `useFarmSatelliteTimeseries` | `/satellite/timeseries` | Every clear pass, oldest first; empty is normal for a new farm |
+| `useFarmSatelliteLayers` | `/satellite/layers?date=` | Only fires once a pass date is known |
+| `useFarmEnvironment` | `/environment` | `null` until the nightly job has run (404 → `null`) |
+| `useFarmAlerts` | `/alerts` + `PATCH /alerts/{id}/read` | Optimistic mark-as-read with rollback on error |
+
+- **First analysis**: when `/latest` 404s, the hook runs `POST /satellite/refresh` automatically and
+  shows **"Analysing your field from space… ~30 s"**. That first run is a *query*
+  (`["satellite-first-analysis", farmId]`), not a mutation, so the Dashboard and Satellite page share
+  one in-flight Earth Engine run and one error state via the query cache instead of each starting
+  its own. A 503 whose message starts "No Sentinel-2 imagery" becomes the **empty state** ("No clear
+  satellite image yet"). Anything else becomes the **error state** with a Retry button that re-runs
+  whichever step failed. A failed *background* refetch never hides already-loaded data.
+- **`components/charts/SeasonCurveChart.tsx`** (Recharts): the field's NDVI as a solid line with a
+  dot per pass, the crop-stage benchmark as a dashed line, and a tooltip with the pass date, NDVI vs.
+  benchmark and cloud %. Clicking a dot selects that pass on the map. Guests see the same chart
+  drawn from demo history.
+- **`components/satellite/PassDateSlider.tsx`**: a range slider over every known pass (timeseries
+  dates ∪ the latest analysis date). Moving it refetches `/layers?date=` for that pass, so the map's
+  tiles and stress zones swap, and the caption's mean value and badges follow the selected pass.
+- **`SourceBadge`** (`components/SourceBadge.tsx`) gained two forms besides the original
+  `provenance` one: `live` → e.g. **"Live — Sentinel-2, 20 Sep, cloud 0.3%"** (any backend
+  resolution label containing "regional", such as SMAP's, gets a blue "· regional" variant), and
+  `demo` → "Demo data". Every satellite number on both pages carries one.
+- **`components/satellite/EnvironmentReportCard.tsx`**: rainfall / land-surface heat / soil moisture
+  / soil sections from `/environment`, each with its own badge. The Dashboard's Soil card shows real
+  pH, texture and organic carbon, and its Moisture card shows real NDWI plus SMAP soil moisture
+  (regional). Soil N-P-K and the weather card remain demo, since there's no source for them (§5.8).
+- **`components/dashboard/AlertsStrip.tsx`**: unread alerts for the selected farm with severity,
+  pass date, the backend's message and a **Mark as read** button. It replaces the demo weather
+  banner for real farms; guests still see the demo banner.
+
+**Two real backend bugs found and fixed during live testing of this branch** (neither was
+reachable before the UI started asking for arbitrary pass dates, or before Sentinel-2C passes
+became common):
+1. **`get_field_map_layers` crashed on a fully clouded pass.** When every field pixel is
+   cloud-masked, the NDVI mean/std-dev `reduceRegion` returns `null`, and building the stress
+   threshold raised `EEException: Number.multiply: Parameter 'left' ... null` → an unhandled 500
+   (which the browser reports as a CORS failure, since the error response carries no CORS headers).
+   Both values now default to 0 via `ee.Algorithms.If`, so a clouded pass renders transparent
+   tiles with no stress zones instead of failing.
+2. **Sentinel-2C passes could never be stored.** `_short_satellite_name()` only mapped 2A/2B and
+   passed any other spacecraft name through raw. "Sentinel-2C" (11 chars) then overflowed the
+   `String(10)` `satellite` column → `StringDataRightTruncationError` → 500 on
+   `/satellite/refresh` (and the post-create background refresh) for any farm whose best recent
+   pass came from S2C. It now maps any "Sentinel-2X" to "S2X" and truncates anything unrecognised to
+   10 chars. Covered by new unit tests (`TestShortSatelliteName`).
+
+**Live-verified** in the browser against the real backend, Postgres and Earth Engine (the test farm
+had no timeseries or alerts of its own, so 6 timeseries rows were seeded **using real Sentinel-2
+scene dates and cloud % for that field** (NDVI values synthetic), plus 2 alerts, then deleted
+again): every slider step fetched and received real tiles for that pass. The chart tooltip, the
+chart-dot → slider sync, all environment badges including SMAP's "regional", the Dashboard's live
+cards, mark-as-read (PATCH 200, strip updated immediately) and the guest demo view with zero backend
+calls were all checked. A temporary second farm exercised the real error → Retry → "Analysing…" →
+ready flow on a genuine 0% cloud S2C pass (which is how bug 2 was found), and was then deleted.
 
 ---
 
@@ -885,7 +955,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-pytest        # 121 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
+pytest        # 126 tests, async, in-memory SQLite — no Postgres or Earth Engine needed (mocked)
 ```
 
 **Nightly jobs (§5.9, §5.11)**: both start automatically with the backend (registered in `main.py`'s
@@ -923,11 +993,13 @@ npm run dev    # http://localhost:3000
 | Real per-farm NDVI/NDWI/EVI/NDMI analysis (backend) | ✅ Real — `POST /farms/{id}/satellite/refresh` runs a live Sentinel-2 query against the farm's own polygon, cached in `satellite_observations`; see §5.6 |
 | Live NDVI/canopy % shown on Dashboard/Satellite for real farms | ✅ Real — `useFarmSatelliteAnalysis()` + `applyLiveSatellite()` overlay real current stats onto the UI, with a "Live Sentinel-2 data" banner and a refresh button; see §5.7. Guest/demo farms still show synthetic data, as they should (no real polygon to analyze) |
 | NDVI/NDWI/EVI timeseries + automated alerts (backend) | ✅ Real — nightly `AsyncIOScheduler` job rebuilds every farm's history from Sentinel-2 and runs 3 alert rules (NDVI drop, below-benchmark, water stress); `GET .../timeseries` and `GET .../alerts` are real, working endpoints; see §5.9 |
-| NDVI historical trend graph | ❌ Mock only, for every farm (real or demo) — labeled "Demo" in the UI; real timeseries data exists server-side (§5.9) but nothing in the UI calls it yet |
+| NDVI season curve + pass-date slider | ✅ Real for real farms — Recharts chart of `GET .../timeseries` (field vs. dashed benchmark, dot per pass, date + cloud % tooltip) and a slider that swaps the map layers per pass; guests see the demo curve, labelled "Demo data"; see §5.12 |
+| Satellite alerts on the Dashboard | ✅ Real for real farms — alerts strip over `GET .../alerts` with mark-as-read (`PATCH /alerts/{id}/read`); see §5.12 |
+| Source badges on satellite numbers | ✅ Real — "Live — Sentinel-2, 20 Sep, cloud 0.3%" / "· regional" / "Demo data" on every satellite value; see §5.12 |
 | Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
-| Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Not yet wired into the frontend |
-| Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture now exist server-side (§5.11, not yet in the UI); N-P-K and weather are still not satellite-derived, need a different data source |
+| Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
+| Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
@@ -942,19 +1014,15 @@ npm run dev    # http://localhost:3000
   deploying (currently only `http://localhost:3000` is authorized).
 - **If password reset is wanted again**, don't resurrect the dev-token workaround — set up a real
   email service (SES/SendGrid/Postmark) first, since that was the reason it got removed.
-- **Surface NDWI/EVI/NDMI and the health score more prominently client-side** — computed, stored,
-  and returned by the API (§5.6), and the current-stats overlay already shows NDVI/NDWI/canopy %
-  (§5.7), but EVI/NDMI/health_score aren't shown anywhere in the UI yet.
-- **Wire the real NDVI/NDWI/EVI timeseries (§5.9) into the frontend** — `GET
-  /farms/{id}/satellite/timeseries` is real and populated nightly, but `SatelliteAnalyticsPanel`'s
-  trend graph still reads `enrichFarmDraft()`'s synthetic points. This is the natural next step now
-  that both the backend timeseries and the alerts (below) exist.
-- **Surface `/farms/{id}/alerts` in the UI** — real alerts are generated nightly (§5.9) but nothing
-  shows them to a farmer yet; a notification badge/list on Dashboard or Satellite would use this
-  directly.
-- **Wire `/farms/{id}/environment` (§5.11) into the frontend** — real rainfall/temperature/soil-
-  moisture/soil data exists server-side but the UI still shows synthetic soil pH/N-P-K values;
-  natural next step is a "Field Conditions" card on the Satellite or Dashboard page.
+- **Surface NDMI client-side** — computed, stored and returned by the API (§5.6), but not shown in
+  the UI. (NDVI/NDWI/EVI, the health score, the timeseries, alerts and the environment report are
+  all shown as of §5.12.)
+- **Give the "no imagery" case its own status code** — the frontend detects it by the 503 message
+  prefix "No Sentinel-2 imagery" (§5.12), which works but is brittle; a distinct code (or an
+  `error_code` field) would be cleaner.
+- **The Satellite page and Dashboard go blank when the backend is unreachable** — the farm list
+  itself (`farmStore`) never finishes loading, so the new satellite error states (§5.12) are never
+  reached in that case. A farm-list error state would fix it.
 - **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked
   for, but Earth Engine flags it deprecated and it stopped updating around mid-2025; the response
   already surfaces this honestly via `as_of` rather than hiding it, but the underlying collection
