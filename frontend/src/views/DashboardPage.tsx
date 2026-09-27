@@ -25,7 +25,7 @@ import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
 import SourceBadge, { LiveSource } from "@/components/SourceBadge";
 import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
 import AlertsStrip from "@/components/dashboard/AlertsStrip";
-import MandiPulseCard from "@/components/dashboard/MandiPulseCard";
+import MarketPriceCard from "@/components/dashboard/MarketPriceCard";
 import FarmsLoadError from "@/components/FarmsLoadError";
 import {
   Satellite, Droplets, TrendingUp, AlertTriangle,
@@ -439,7 +439,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <MandiPulseCard farmId={currentFarm?.id} />
+            <MarketPriceCard farmId={currentFarm?.id} />
 
             <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
               <span className="text-[10px] uppercase font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded">

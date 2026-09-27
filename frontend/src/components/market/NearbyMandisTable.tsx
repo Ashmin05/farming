@@ -25,9 +25,12 @@ export default function NearbyMandisTable({
   onSelect,
   staleAfterDays = 7,
   today,
+  bestMarketId,
 }: {
   markets: NearbyMarket[];
   selectedMarketId?: number;
+  /** Highest recent modal price nearby -- tagged "Best today". */
+  bestMarketId?: number;
   onSelect?: (marketId: number) => void;
   staleAfterDays?: number;
   today: string;
@@ -97,7 +100,15 @@ export default function NearbyMandisTable({
                 className={`border-b border-farm-border-color last:border-0 ${onSelect ? "cursor-pointer hover:bg-farm-green-light/50" : ""} ${selected ? "bg-farm-green-light/60" : ""}`}
               >
                 <td className="py-2.5 px-2">
-                  <p className="font-semibold text-farm-dark">{m.market}</p>
+                  <p className="font-semibold text-farm-dark">
+                    {m.market}
+                    {m.market_id === bestMarketId && (
+                      <span className="ml-1.5 align-middle text-[10px] font-bold uppercase text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-px">Best today</span>
+                    )}
+                    {m.model_ready && (
+                      <span className="ml-1.5 align-middle text-[10px] font-bold uppercase text-sky-700 bg-sky-50 border border-dashed border-sky-200 rounded px-1 py-px">Estimate</span>
+                    )}
+                  </p>
                   <p className="text-[11px] text-farm-muted">{m.district ?? m.state}</p>
                 </td>
                 <td className="py-2.5 px-2 text-farm-dark whitespace-nowrap">

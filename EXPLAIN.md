@@ -32,7 +32,7 @@ This is a single repo. Feature branches (`frontend`, `backend`, `back_auth`, `pr
 `farm-environment-report`, `environment-nightly-refresh`, `new-frontend`, `bug-fixes`, `mandi-prices`, and the
 market-price stack `feat/price-data-provider` → `feat/price-ingestion` → `feat/price-history-backfill` →
 `feat/price-analytics` → `feat/price-forecast-model` → `feat/price-api` → `feat/price-frontend`) were used during buildout
-and have all been merged into `main`, which is
+and have all been merged into `main` (`new-ui`, §5.15, is the branch in progress), which is
 what's pushed to origin and described by this document. Notable merged work, roughly in order:
 
 - `back_auth` — JWT + Google auth system, real Login/Register pages, per-account data isolation.
@@ -154,7 +154,7 @@ per the project's own convention (documented in each `page.tsx`).
 | My Farms | `/farms` | `FarmsPage.tsx` |
 | Farm detail / Field detail | `/farms/[farmId]`, `/farms/[farmId]/fields/[fieldId]` | (in `src/app/farms/...`) |
 | Satellite Analysis | `/satellite` | `SatellitePage.tsx` |
-| Mandi Prices | `/market` | `MarketPage.tsx`: real mandi prices, trends, nearby mandis, forecasts (§5.14) |
+| Market | `/market` | `MarketPage.tsx`: live mandi prices, 90-day + 30-day forecast chart, sell-or-hold suggestion, nearby mandis (§5.14, §5.15) |
 | Weather & Alerts | `/weather` | `WeatherPage.tsx` — still exists, but no longer linked from the sidebar (removed as a redundant nav item; still reachable by direct URL) |
 | KrishiBot AI chat | `/ai-chat` | `AiChatPage.tsx` — now requires sign-in (§6.8) |
 | Profile | `/profile` | `ProfilePage.tsx` |
@@ -162,7 +162,7 @@ per the project's own convention (documented in each `page.tsx`).
 | Help Center | `/help` | `HelpPage.tsx` |
 
 `AppLayout.tsx` provides the shared sidebar/nav shell for the logged-in app pages (Dashboard,
-Farms, Satellite, Mandi Prices, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
+Farms, Satellite, Market, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
 above). Login/Register/Home are standalone, full-page layouts using the public `Navbar.tsx`
 (Home) or their own minimal header (Login/Register) — Login/Register also have their own
 glassmorphism background (§4.4).
@@ -320,7 +320,7 @@ backend/
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
 │   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
 │   │   ├── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
-│   │   └── market_prices.py  # GET /market-prices/*, GET /farms/{id}/market-prices (§5.14)
+│   │   └── market_prices.py  # GET /market-prices/*, GET /farms/{id}/market-prices, GET /farms/{id}/market/forecast (§5.14, §5.15)
 │   ├── jobs/
 │   │   ├── scheduler.py   # APScheduler jobs: timeseries+alerts (§5.9), environment (§5.11), mandi prices (§5.14)
 │   │   └── market_prices.py  # mandi price ingestion / catalogue / training / forecast jobs (§5.14)
@@ -330,7 +330,7 @@ backend/
 │                            # ingest_market_prices, backfill_market_prices, market_price_report,
 │                            # geocode_markets, train_price_models
 ├── models_store/            # trained price models (gitignored, PRICE_MODEL_DIR)
-└── tests/                   # pytest suite (async, in-memory SQLite): 242 tests
+└── tests/                   # pytest suite (async, in-memory SQLite): 252 tests
     └── fixtures/market_prices/  # trimmed copies of real Agmarknet/CEDA responses
 ```
 
@@ -373,6 +373,7 @@ Earth Engine, the mandi price sources) behind a small interface the rest of the 
 | GET | `/market-prices/forecast?market_id=&commodity=&horizon=` | Stored 7/14/30-day estimates with expected range, model + validation metrics, or the reason there's none (§5.14) |
 | GET | `/market-prices/quality?days=` | Data-quality report (§5.14) |
 | GET | `/farms/{farm_id}/market-prices` | The farm's crop mapped to mandi commodities + nearby markets from its centre point; 404 if not yours (§5.14) |
+| GET | `/farms/{farm_id}/market/forecast?commodity_id=&market_id=` | The farm's crop at the nearest mandi with a forecast (or the given crop/mandi): live price, 90-day history, 7/14/30-day estimates, nearby mandis and a sell-now / hold-N-days suggestion; 404 if not yours or an unknown crop/mandi (§5.15) |
 
 Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
 remain frontend-mock-only for now (§4.2).
@@ -1030,8 +1031,8 @@ is what this estimate uses". It never implies ML was used when it wasn't.
   - last model update and a disclaimer
 
 Loading, empty, error, stale and "forecast unavailable" states are handled throughout. The
-Dashboard's hard-coded "Nashik Onion Mandi ₹2,400" card is replaced by `MandiPulseCard`, which
-shows the real price for the farm's crop, or a sign-in prompt for demo farms.
+Dashboard's hard-coded "Nashik Onion Mandi ₹2,400" card was replaced by a real mandi card (since
+replaced again by `MarketPriceCard`, §5.15). The page layout described above was reworked in §5.15.
 
 **Tests** (110 new, 242 in the suite, all against in-memory SQLite + respx; fixtures are trimmed
 copies of real Agmarknet/CEDA responses):
@@ -1041,6 +1042,129 @@ copies of real Agmarknet/CEDA responses):
 - analytics/quality/nearby: 16
 - forecasting: 12
 - API: 11
+
+### 5.15 Market page redesign + sell-or-hold suggestion (`new-ui`)
+
+Builds on §5.14's prices and forecasts: a farm-level "sell now or hold?" answer, and a Market page
+built around it.
+
+**`PriceService.recommendation(farm)`** (`app/services/market_prices/price_service.py`):
+1. The farm's crop is mapped to its mandi commodity (the same map as §5.14; Rice → Paddy(Common)).
+2. It picks the **nearest model-ready mandi**, going through the nearby list in order (distance,
+   then district, then state). A mandi is model-ready when it has a stored forecast made from a
+   price no more than 7 days old. If the closest mandi has no forecast, the next one is used, so
+   the answer comes from somewhere a forecast actually exists. The user can pick any crop or
+   mandi instead.
+3. For each horizon (7, 14 and 30 days) it compares the mandi's latest modal price with the
+   estimate:
+   - **gain** = estimate − today's price
+   - **error** = the model's validation MAPE at that horizon × today's price. The models forecast
+     relative moves pooled across mandis, so a % error scaled to this mandi's price is fairer than
+     pooled rupees. It falls back to the MAE when there's no MAPE.
+   - **holding cost** = today's price × the crop's assumed % per 30 days × days/30.
+     `MARKET_HOLDING_COST_PCT` defaults to wheat/rice 1%, potato 3%, onion 4%, green chilli 15%,
+     tomato 20% and sugarcane 10%; anything else gets 3%.
+4. **"Hold ~N days" only if gain > error + holding cost.** When several horizons qualify, it picks
+   the one that clears the bar by the most. Otherwise the answer is **"Sell now"**, with a one-line
+   reason taken from the most optimistic estimate:
+   - no model beat "no change"
+   - prices are estimated flat or falling
+   - the rise doesn't cover the holding cost
+   - the rise after holding cost is within the model's error
+5. The response includes:
+   - the expected gain (₹/quintal, %, by date)
+   - the error range (typical error plus the 80% interval as a gain range)
+   - the holding cost (marked as assumed)
+   - a breakdown for every horizon
+   - the **best mandi nearby today** (highest modal price reported in the last 7 days, and how
+     much more it pays than the selected mandi, before transport)
+   - a disclaimer
+6. **Perishables** (`MARKET_PERISHABLE_COMMODITIES`) get a warning that holding may not be
+   possible without cold storage. They get it even when there's no suggestion.
+7. When there's no forecast, the price is stale, or no mandi nearby has reported the crop, the
+   answer is **"No suggestion"** with the reason. A "Sell now" is never made up.
+
+On real West Bengal data (27 Sep 2026) every crop currently says **Sell now**:
+- Potato, wheat and paddy: the selected models are the no-change baselines.
+- Tomato: the 30-day estimate of +₹342 doesn't cover the ~₹700 assumed cost of holding a
+  perishable.
+- Onion: the rise after holding cost (₹271) is well within the model's ±₹896 error.
+
+That's the rule working as intended. It only says hold when the forecast is clearly better than
+its own error.
+
+**Route:** `GET /farms/{id}/market/forecast?commodity_id=&market_id=` (owner only). It returns the
+selected crop and mandi (with distance and whether it's model-ready), today's stats, 90 days of
+history, the stored forecasts and model info, the recommendation, and nearby mandis flagged
+`model_ready`.
+
+**Frontend**:
+- **`/market` (`views/MarketPage.tsx`)**
+  - Selectors: farm → crop → mandi. Mandis are nearest first, with forecast-ready ones marked.
+    With no farm selected it's crop → state → mandi over the public endpoints, and the sell/hold
+    panel asks the user to pick or add a farm.
+  - Sections in order: **today's price** (Live), the **Sell or hold?** card, the **90 + 30 day
+    chart**, **nearby mandis**, then the longer history, summary and outlook.
+- **`components/charts/PriceForecastChart.tsx`:** 90 days of actual modal prices as a solid
+  **Live** line, the 7/14/30-day estimates as a dashed **Estimate** line with the 80% range
+  shaded, and a vertical **Today** marker. The time axis is real, so horizons are spaced
+  correctly. The horizon behind the suggestion is drawn with a bigger dot.
+- **`components/market/RecommendationCard.tsx`:** the headline and reason; gain / error range /
+  holding cost; the perishable warning; the best mandi nearby (with "View this mandi"); and a
+  collapsible "How this was worked out" table (per horizon: estimate, gain, holding, error, worth
+  it?).
+- **`components/market/ModelInfoTooltip.tsx`:** an (i) Model button. On hover, focus or tap it shows
+  the version, trained date and MAPE per horizon, plus the training period.
+- **Labels:** actual prices carry a green **Live** badge and model output a dashed-blue
+  **Estimate** badge (`components/market/Badges.tsx`). The legend spells them out, so colour
+  never carries the meaning alone.
+- **Nearby mandis table:** tags the **Best today** mandi and those with an **Estimate**.
+- **Sidebar:** "Mandi Prices" → **Market**.
+- **Dashboard:** `MarketPriceCard` shows the Live price at the chosen mandi, the 30-day Estimate
+  and the suggestion's headline and reason, with a perishable note. Guests get a sign-in prompt.
+- **Removed:** `ForecastPanel` and `ForecastChart` (replaced by the chart above), and
+  `MandiPulseCard`.
+- **Empty states:** when there's no estimate, the chart still draws the Live line, the legend
+  drops its Estimate / Expected range entries, and a notice gives the reason. The x-axis has fixed
+  date ticks every 15 days, so a mandi with only a few days of data still gets a readable
+  timeline.
+
+**Checked in the browser** (27 Sep 2026, against the real database):
+- **A crop with no model:** Wheat at Shevgaon(Bodhegaon), Maharashtra. The page showed the Live
+  price (₹2,700 on 26 Sep), the 90-day actual line and "No estimate for this mandi: no model has
+  been trained for this commodity in this state yet". The card said "No suggestion".
+- **Actual vs forecast:** Onion at Bara Bazar, West Bengal. The chart showed the solid Live line
+  up to the Today marker, then the dashed Estimate line with the shaded 80% range. The 7/14/30-day
+  estimate cards sat above the chart.
+- **Never hold inside the error:** checked on the same onion data, the suggestion is "Sell now".
+  The 30-day estimate is +₹469/quintal, but the rise left after holding cost (₹271) is inside the
+  model's ±₹896 error. The card was rendered with this real payload.
+  - This one isn't visible on the owners' farms yet. They're all in Maharashtra, where no model is
+    trained, so every farm there gets "No suggestion".
+  - Seeing it on a real farm needs a farm in West Bengal, or a Maharashtra backfill and training
+    run (§10).
+
+Fixes made during those checks:
+- The model tooltip closed straight after a click. Focusing the button opened it and the click
+  then toggled it shut; a click now only opens it.
+- A "Sell now" reason quoted the 7-day estimate ("rise ₹0") while the 30-day estimate rose. The
+  reason now uses the most favourable estimate.
+- The two chart empty-state fixes above.
+
+**Tests** (10 new, 252 in the suite): the rule itself covers
+- hold only when the rise beats error + holding cost
+- sell when the rise is within the error, doesn't cover the holding cost, or is flat/falling, or
+  when the model is naive
+- a higher holding cost (tomato) turning the same estimate from hold into sell
+- a stale price giving no suggestion
+- per-commodity costs and perishables
+
+API tests cover:
+- no forecast → no suggestion
+- skipping a closer mandi without a forecast for the nearest one with one
+- an explicit mandi choice, and 404 for an unknown mandi
+- best mandi nearby and its price difference
+- a sell-now case
 
 ---
 
@@ -1249,6 +1373,8 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `MARKET_PRICE_STATES` / `MARKET_PRICE_COMMODITIES` | Backend | What the nightly job keeps fresh (comma-separated Agmarknet names). Default `West Bengal` × `Potato,Rice,Paddy(Common),Wheat,Tomato,Onion`. Every farm's state × crop is added when `MARKET_PRICE_INCLUDE_FARM_CROPS` is true (default) |
 | `MARKET_PRICE_CURRENT_DAYS` | Backend | Days re-fetched each night (default 10: late/revised reports are picked up; the upsert makes the overlap free) |
 | `PRICE_MODEL_DIR` | Backend | Where trained forecast models are written (default `backend/models_store`, gitignored) |
+| `MARKET_HOLDING_COST_PCT` / `MARKET_HOLDING_COST_DEFAULT_PCT` | Backend | Assumed cost of holding a crop (storage + losses) as % of its value per 30 days, as `Commodity:pct` pairs, e.g. `Wheat:1,…,Tomato:20`; unlisted commodities use the default (3). Rough planning figures for the sell/hold suggestion, not measurements (§5.15) |
+| `MARKET_PERISHABLE_COMMODITIES` | Backend | Crops that get the "holding may not be possible" warning (default `Tomato,Green Chilli,Sugarcane`) (§5.15) |
 | `JWT_SECRET_KEY` | Backend | Signs JWTs — **must** be overridden outside local dev |
 | `JWT_ALGORITHM` | Backend | Default `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Backend | Default `30` |
@@ -1352,6 +1478,7 @@ npm run dev    # http://localhost:3000
 | Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
 | Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms |
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
+| Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
 | Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
 | Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
@@ -1383,7 +1510,10 @@ npm run dev    # http://localhost:3000
   - weather/arrival forecasts as features
   - quantile models for the intervals
 - **Backfill more states** (only West Bengal has history). Farms' states get current prices
-  nightly, but they need a backfill before forecasts can be trained for them.
+  nightly, but they need a backfill before forecasts can be trained for them. Until then, farms
+  outside West Bengal get "No suggestion" on the Market page (§5.15). All the registered farms
+  are in Maharashtra, so run `backfill_market_prices` + `train_price_models` for Maharashtra ×
+  the farms' crops next.
 - **Rice's daily series mixes varieties** (fine vs coarse), which causes most of the "abnormal
   change" rows in the quality report. A dominant-variety series would be cleaner.
 - **Market name ambiguity**: a price reported as "Bishnupur APMC" doesn't match the catalogue's
@@ -1392,6 +1522,9 @@ npm run dev    # http://localhost:3000
 - **District names in farm records vs Agmarknet's** (e.g. "Ahmednagar" vs "Ahilyanagar", and
   Agmarknet's own "Sounth 24 Parganas" typo). Nearby mandis fall back to distance/state, but the
   same-district step needs matching names.
+- **Holding costs (§5.15) are assumptions.** Replace them with regional storage tariffs and
+  measured loss rates, and consider non-linear losses for perishables (today's cost grows linearly
+  with days held).
 - **The Harvest Estimation card's "Target Mandi Rate"** is still generated demo data; it could
   now read the farm's real modal price.
 - **Revisit the SMAP soil-moisture source** — `NASA/SMAP/SPL4SMGP/007` (§5.11) is what was asked

@@ -15,7 +15,7 @@ const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
-  { href: "/market", icon: IndianRupee, label: "Mandi Prices" },
+  { href: "/market", icon: IndianRupee, label: "Market" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
   { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
