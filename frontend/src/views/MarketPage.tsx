@@ -54,6 +54,10 @@ const PERIODS = [
 ];
 const STALE_AFTER_DAYS = 7;
 const BASELINE_MODELS = new Set(["naive", "moving_average", "seasonal_naive"]);
+// The Crop selector only offers these -- the other Agmarknet commodities
+// with stored prices (Soyabean, Cotton, Maize, chillies, ...) stay out of
+// the picker, in this order.
+const ALLOWED_CROPS = ["Rice", "Wheat", "Onion", "Sugarcane", "Potato"];
 
 function Section({
   title,
@@ -262,17 +266,29 @@ function MarketContent() {
   }, [mounted, realFarms]);
 
   const commodities = useMarketCommodities();
+  // The most-traded allowed crop, used as the browse-mode default and as the
+  // fallback when a farm's real crop isn't one of the allowed ones.
+  const topAllowedCommodity = useMemo(() => {
+    const allowed = (commodities.data ?? []).filter((c) => ALLOWED_CROPS.includes(c.name));
+    return allowed.length ? [...allowed].sort((a, b) => b.markets - a.markets)[0].id : undefined;
+  }, [commodities.data]);
 
   // ---- farm mode ----
   const farmForecast = useFarmMarketForecast(farm?.id, pickCommodity, pickMarket);
-  const fd = farmMode ? farmForecast.data : undefined;
+  const rawFd = farmMode ? farmForecast.data : undefined;
+  // A farm's actual crop can map to a commodity outside the allowed list
+  // (e.g. Soyabean) -- when nothing was explicitly picked, swap to the
+  // top allowed crop instead of showing one the selector doesn't offer.
+  const cropNeedsCorrection =
+    farmMode && pickCommodity === undefined && !!rawFd?.selected_commodity &&
+    !ALLOWED_CROPS.includes(rawFd.selected_commodity.name) && topAllowedCommodity !== undefined;
+  useEffect(() => {
+    if (cropNeedsCorrection && topAllowedCommodity !== undefined) setPickCommodity(topAllowedCommodity);
+  }, [cropNeedsCorrection, topAllowedCommodity]);
+  const fd = cropNeedsCorrection ? undefined : rawFd;
 
   // ---- browse mode ----
-  const topCommodity = useMemo(
-    () => (commodities.data?.length ? [...commodities.data].sort((a, b) => b.markets - a.markets)[0].id : undefined),
-    [commodities.data]
-  );
-  const browseCommodity = farmMode ? undefined : pickCommodity ?? topCommodity;
+  const browseCommodity = farmMode ? undefined : pickCommodity ?? topAllowedCommodity;
   const locations = useMarketLocations(browseCommodity);
   const browseState = useMemo(() => {
     const states = locations.data;
@@ -331,12 +347,14 @@ function MarketContent() {
     return (latest.data?.prices ?? []).map((p) => ({ id: p.market_id, label: p.market })).sort((a, b) => a.label.localeCompare(b.label));
   }, [farmMode, fd, latest.data]);
 
-  const cropOptions = useMemo(() => {
-    const list = (commodities.data ?? []).map((c) => ({ id: c.id, name: c.name }));
-    const sel = fd?.selected_commodity;
-    if (farmMode && sel && !list.some((c) => c.id === sel.id)) list.unshift(sel);
-    return list;
-  }, [commodities.data, farmMode, fd]);
+  const cropOptions = useMemo(
+    () =>
+      (commodities.data ?? [])
+        .filter((c) => ALLOWED_CROPS.includes(c.name))
+        .map((c) => ({ id: c.id, name: c.name }))
+        .sort((a, b) => ALLOWED_CROPS.indexOf(a.name) - ALLOWED_CROPS.indexOf(b.name)),
+    [commodities.data]
+  );
 
   const chooseFarm = (id: string) => {
     // Leaving farm mode keeps the crop on screen.
@@ -362,7 +380,7 @@ function MarketContent() {
     return <Notice>No mandi price data has been imported yet. Prices appear here after the nightly import from Agmarknet.</Notice>;
   }
 
-  const loadingMain = farmMode ? farmForecast.isLoading : latest.isLoading;
+  const loadingMain = farmMode ? farmForecast.isLoading || cropNeedsCorrection : latest.isLoading;
   const mandiLocation = stats ? `${stats.district ? `${stats.district}, ` : ""}${stats.state ?? ""}` : "";
 
   return (
