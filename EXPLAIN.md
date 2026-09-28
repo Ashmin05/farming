@@ -1353,13 +1353,103 @@ data rather than a fixed rule of thumb:
   an Open-Meteo forecast failure (only reachable when the plan isn't already in deficit, per step 4
   above), 400 on an invalid log (non-positive depth, future date). `GET` never 404s, matching
   `/weather` — the first call computes a plan from scratch.
-- **Not done in this pass**: no frontend wiring (`useIrrigation`/`lib/api/` still serve the mock
-  `farmStore.ts` data, §4.2) — this branch is backend-only, same as §5.6 before §5.7 existed. No test
-  exercises live Earth Engine/Open-Meteo archive calls (same as the rest of `earth_engine_client.py`);
+- **Frontend**: `lib/api/irrigation-client.ts` + `useFarmIrrigation.ts` (same `isRealFarmId`-gated,
+  `apiFetch`/`SourceBadge` pattern as `weather-client.ts`/`useFarmWeather.ts`, §5.17) wire
+  `GET /farms/{id}/irrigation` into the Dashboard's Canopy Moisture card — a "Modelled" `SourceBadge`
+  plus either the next irrigation date/depth (in deficit) or the current depletion vs. RAW (not yet
+  in deficit), alongside the card's existing NDWI/soil-moisture numbers. `POST .../irrigation/log`
+  (recording a farmer-reported irrigation) and the Satellite page's irrigation card are still
+  unwired — see "not done yet" below. No test exercises live Earth Engine/Open-Meteo archive calls
+  (same as the rest of `earth_engine_client.py`);
   `tests/test_irrigation_kc.py` covers the pure Kc/root-depth/TAW math and
   `tests/test_irrigation_service.py` covers the service against mocked clients (roll-forward math,
   CHIRPS-preferred-over-archive fallback, backdated-log adjustment, NDVI-driven Kc) — 23 new tests,
   286/286 passing overall.
+
+### 5.19 AI Advisor — KrishiBot (`ai-advisor` branch)
+
+A real LLM-backed advisor answering a farmer's free-text question about ONE farm, grounded only in
+that farm's already-computed data — never general agronomy knowledge, never another farm's data:
+
+- **`app/integrations/gemini_client.py`** — thin wrapper over Google's `google-genai` SDK.
+  `generate_structured(system_instruction, contents, response_model)` runs a `generateContent` call
+  asking for JSON matching a given pydantic model (`response_mime_type="application/json"` +
+  `response_schema`), and returns `response.parsed` already validated. `GEMINI_API_KEYS` is
+  comma-separated (see §7) — the client tries each key in turn and falls through to the next on
+  *any* error, since several free-tier keys quota-exhaust independently (confirmed live: Google's
+  free tier for `GEMINI_MODEL` is capped at `GenerateRequestsPerDayPerProjectPerModel-FreeTier` —
+  as low as 20 requests/day per key/project — so the 3-key fallback is doing real work, not just
+  covering a hypothetical). A `5xx` (Google's own "high demand" overload) gets one short in-place
+  retry on the *same* key with backoff before moving on, since that's the model being momentarily
+  overloaded, not the key; a `429` moves straight to the next key with no retry, since it means this
+  key/project's own quota is exhausted, which a couple of seconds of backoff can't fix. Only raises
+  `GeminiRequestError` once every key has failed (after retries). `GeminiNotConfiguredError` is a
+  distinct case (list is empty) so callers can tell "not set up" from "set up but broken." Runs off
+  the event loop via `asyncio.to_thread` in `AdvisorService.ask` (the SDK's HTTP client is
+  synchronous, and now sometimes sleeps mid-call for retries — either would otherwise block every
+  other request this process is serving).
+- **`AdvisorService.ask(farm, user, question, language)`** (`app/services/advisor_service.py`) is the
+  orchestrator:
+  1. Checks the caller against a per-user, in-memory rate limit (`ADVISOR_RATE_LIMIT_PER_HOUR`, §7) —
+     there's no Redis/rate-limiting infra anywhere else in this stack yet, so this is a deliberately
+     simple fixed-window counter, single-process, resets on restart.
+  2. Builds a small `context` dict, module by module, calling each existing service exactly the way
+     its own router does (never re-deriving anything): `farm` (profile, always present), `season`
+     (days-since-sowing + `benchmark_ndvi_for_crop`, §5.9, computed here rather than stored anywhere),
+     `satellite` (`SatelliteService.get_latest`, §5.6) + `alerts` (`get_alerts`, §5.9) when a satellite
+     observation exists, `environment` (`get_environment`, §5.11), `weather`
+     (`WeatherService.get_weather`, §5.17, today + next-3-days rain/heat/heavy-rain flags),
+     `irrigation` (`IrrigationService.get_plan`, §5.18), `market_price` (`PriceService.farm_forecast`,
+     §5.14/§5.15's today price + recommendation). Every module is tagged with a human `label` and an
+     `as_of` date; a module with no data for this farm is simply left out of the dict rather than sent
+     as null — the system instruction tells Gemini it may only cite a module that's actually present.
+     Each per-module fetch is independently best-effort (its own try/except) so one missing/broken
+     data source (e.g. Open-Meteo down) degrades the context instead of failing the whole question.
+  3. If `GEMINI_API_KEYS` is empty, **or** Gemini itself is unavailable (`GeminiRequestError` — every
+     key failed after retries), skips/gives up on the model and calls `_scripted_reply()` — a short,
+     rule-based summary of whatever's in the context (crop health score, next irrigation date, mandi
+     price + recommendation headline, rain/heat/critical-alert warnings). It doesn't attempt the
+     farmer's actual question (that needs the model) — only reports what's known — and is flagged back
+     to the client via `is_scripted_fallback: true` so the UI can tell the difference. KrishiBot never
+     surfaces a hard error to the chat UI for a Gemini-side failure; it always answers from the real
+     data it already has. (Not to be confused with the frontend's own separate guest/demo fallback,
+     `apiClient.sendChatMessage`, §6.8, used for signed-out or non-real-farm sessions before the
+     backend is ever called.)
+  4. Otherwise calls Gemini with `_SYSTEM_INSTRUCTION` (answer strictly from context; say "I don't
+     have that data" rather than guess; answer in the requested `language`; be short and practical)
+     requesting `AdvisorLLMOutput {answer, action_points[], warnings[], sources_used[]}`.
+  5. **`sources_used` is re-validated server-side**, not trusted from the model: `_finalize()` drops
+     any module key the model names that isn't actually a key in `context`, then maps each surviving
+     key to its `label` and its *real, already-known* `as_of` date (never a date the model wrote
+     itself) — this is what lets the UI show "Based on: Satellite 20 Sep, Agmarknet 24 Sep" without
+     trusting the LLM to get dates right.
+- **`POST /farms/{id}/ask`** (`app/routers/assistant.py`) — same farm-ownership-checked, 404-never-403
+  pattern as every other `/farms/{id}/...` route (§5.x). Maps `AdvisorRateLimitError` → 429;
+  `AdvisorServiceError` → 503 is still mapped defensively but isn't raised by a Gemini failure any
+  more (see point 3 above — that now degrades to the scripted reply instead), so in practice it's
+  currently unreachable except from a genuine unexpected error. Takes `{question, language}`, returns
+  `AdvisorAskResponse {answer, action_points, warnings, sources_used, language, is_scripted_fallback,
+  generated_at}`.
+- **No new database table** — unlike every other `/farms/{id}/...` feature, nothing here is cached or
+  persisted; each question re-gathers the context fresh (all the underlying reads are themselves
+  already cached by their own service) and the rate-limit counter is in-memory only.
+- **Frontend**: `lib/api/advisor-client.ts` (same `isRealFarmId`-gated, `apiFetch`/error-class pattern
+  as `irrigation-client.ts`, §5.18) + a new shared `lib/hooks/useKrishiBot.ts` that both
+  `KrishiBotWidget.tsx` (the floating widget) and `AiChatPage.tsx` (`/ai-chat`) now call: a real,
+  signed-in farm (`isRealFarmId`, picked from `useFarmStore()` — the widget defaults to the account's
+  first farm, `/ai-chat` also accepts a `?farm=<id>` query param) routes through `askAdvisor()` to the
+  real endpoint above; a guest/demo session keeps using the existing `apiClient.sendChatMessage`
+  scripted/mock replies exactly as before (§6.8) — the AI advisor never runs for a farm it has no real
+  data for. Both surfaces render `action_points` as a bullet list, `warnings` as amber callouts, and
+  `sources_used` as a "Based on: Satellite 20 Sep, Agmarknet 24 Sep"-style line using the existing
+  `formatPassDate` helper (`SourceBadge.tsx`, §5.12) — the same per-module labels/dates
+  `AdvisorService._finalize` computed server-side.
+- **What's not done yet**: no automated tests for `AdvisorService`/`gemini_client.py` (the rest of the
+  external-API integrations, e.g. `earth_engine_client.py`, are similarly untested against the live
+  API — this follows that same pattern, not a new gap); no per-farm chat history persistence (every
+  question is answered independently, previous turns aren't included as context); rate limiting is
+  in-memory only, so it resets on every backend restart and isn't shared across multiple worker
+  processes if this ever moves beyond a single-process deployment.
 
 ---
 
@@ -1577,6 +1667,9 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `GOOGLE_CLIENT_ID` | Backend | Same value as `NEXT_PUBLIC_GOOGLE_CLIENT_ID` — verifies Google ID tokens |
 | `GEE_PROJECT_ID` | Backend | The Google Cloud project registered for Earth Engine access (§5.5) — required for Earth Engine to work at all |
 | `GEE_SERVICE_ACCOUNT_EMAIL` / `GEE_KEY_PATH` | Backend | Optional production auth path (service-account key). Leave both blank to use local Application Default Credentials instead (§5.5) — that's the dev setup today |
+| `GEMINI_API_KEYS` | Backend | Comma-separated Gemini API key(s) for the AI Advisor / KrishiBot (§5.19). `GeminiClient` tries each in order, falling through on a quota/auth/other error. Blank = KrishiBot runs in its scripted (non-LLM) fallback mode instead |
+| `GEMINI_MODEL` | Backend | Gemini model id used for `POST /farms/{id}/ask` (default `gemini-3.6-flash` — Google retired `gemini-2.5-flash` for new API keys) |
+| `ADVISOR_RATE_LIMIT_PER_HOUR` | Backend | Per-user cap on `POST /farms/{id}/ask` (default `20`) — in-memory, resets on restart (§5.19) |
 
 ---
 
@@ -1676,7 +1769,7 @@ npm run dev    # http://localhost:3000
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
 | Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
 | Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
-| Irrigation recommendation (backend) | ✅ Real — `GET /farms/{id}/irrigation` computes a FAO-56 root-zone water balance (depletion vs. readily available water) from CHIRPS/Open-Meteo history + forecast, soil texture, and optionally NDVI; `POST .../irrigation/log` records farmer irrigation; see §5.18. **Not wired into the frontend yet** — the Dashboard/Satellite pages still show `farmStore.ts`'s synthetic irrigation data for every account, real or guest |
+| Irrigation recommendation | ✅ Real — `GET /farms/{id}/irrigation` computes a FAO-56 root-zone water balance (depletion vs. readily available water) from CHIRPS/Open-Meteo history + forecast, soil texture, and optionally NDVI; `POST .../irrigation/log` records farmer irrigation; see §5.18. Wired into the **Dashboard's** Canopy Moisture card for real farms (`useFarmIrrigation`, `SourceBadge`); the **Satellite page's** irrigation card and the log-entry UI still show/use `farmStore.ts`'s synthetic data |
 | Fields / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
@@ -1737,10 +1830,10 @@ npm run dev    # http://localhost:3000
 - Build real backend endpoints for fields/yield, and a corresponding `real-client.ts` cutover
   (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the farms/satellite/weather/irrigation
   API.
-- **Wire `GET /farms/{id}/irrigation` into the frontend** (§5.18) — `useIrrigation` and the
-  Dashboard/Satellite irrigation cards still show `farmStore.ts`'s synthetic data for every account.
-  The same `isRealFarmId`-gated hook + `SourceBadge` pattern used for weather (§5.17) and environment
-  (§5.12) would apply directly.
+- **Wire `GET /farms/{id}/irrigation` into the Satellite page** (§5.18) — only the Dashboard's Canopy
+  Moisture card uses `useFarmIrrigation` so far; the Satellite page's irrigation card still shows
+  `farmStore.ts`'s synthetic data. Also still unwired: a UI for `POST .../irrigation/log` (recording
+  a farmer-reported irrigation) — today that endpoint has no frontend caller at all.
 - **Irrigation's per-call Kc/root-depth is a single snapshot, not a true historical reconstruction**
   (§5.18) — the roll-forward over historical days and the forward projection both use *today's*
   resolved Kc, not a day-by-day recomputation from what NDVI/growth-stage actually was on each of

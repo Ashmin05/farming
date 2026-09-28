@@ -38,3 +38,8 @@ joblib>=1.3                  # Model artifact storage
 # Irrigation (FAO-56 water balance, app/services/irrigation_service.py): reuses
 # httpx (Open-Meteo's historical/archive endpoint) and earthengine-api (CHIRPS
 # daily rainfall) already listed above -- no new packages.
+
+# AI Advisor / KrishiBot (app/integrations/gemini_client.py,
+# app/services/advisor_service.py): structured-output Gemini calls, with the
+# scripted fallback in advisor_service.py needing nothing extra.
+google-genai>=1.5.0
