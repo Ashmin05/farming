@@ -59,7 +59,8 @@ Rules:
 - If the context doesn't contain what's needed to answer, say so plainly (e.g. "I don't have that data
   for this farm yet") instead of guessing or reaching for general agronomy knowledge.
 - Be practical and short -- a working farmer reading this on a phone, not an essay.
-- Answer in the language named by "language" in the input (a BCP-47 code or a plain language name). If
+- Answer in the language the farmer wrote the question in (e.g. Bengali, Hindi or English). "language"
+  in the input is only the app's UI language -- use it when the question's language is unclear. If
   you can't write fluently in that language, answer in English and say so in one short sentence.
 - "action_points" are short, concrete next steps, only when the context actually supports them -- an
   empty list is correct for a purely informational question.
@@ -134,6 +135,9 @@ class AdvisorService:
             )
 
         context = await self._build_context(farm)
+        # The widget always sends the UI language ("en"); a question typed in
+        # Bengali or Hindi script should still be answered in that language.
+        language = _language_from_script(question) or language
 
         if not settings.gemini_api_keys:
             return _scripted_reply(context, language)
@@ -163,7 +167,7 @@ class AdvisorService:
             # useful reply from the real farm data it already has, even when
             # Gemini itself is unavailable.
             logger.warning("All Gemini keys failed, using scripted fallback: %s", exc)
-            return _scripted_reply(context, language)
+            return _scripted_reply(context, language, ai_unavailable=True)
 
         return _finalize(llm_output, context, language, is_scripted_fallback=False)
 
@@ -308,6 +312,19 @@ def _finalize(
     )
 
 
+def _language_from_script(text: str) -> str | None:
+    """"bn"/"hi" when the text is mostly Bengali or Devanagari script, else
+    None (Latin-script text is left to the caller's language)."""
+    bengali = sum(1 for ch in text if "ঀ" <= ch <= "৿")
+    devanagari = sum(1 for ch in text if "ऀ" <= ch <= "ॿ")
+    letters = sum(1 for ch in text if ch.isalpha()) or 1
+    if bengali / letters > 0.5:
+        return "bn"
+    if devanagari / letters > 0.5:
+        return "hi"
+    return None
+
+
 def _as_date(value: object) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -316,7 +333,7 @@ def _as_date(value: object) -> date | None:
     return None
 
 
-def _scripted_reply(context: dict, language: str) -> AdvisorAskResponse:
+def _scripted_reply(context: dict, language: str, *, ai_unavailable: bool = False) -> AdvisorAskResponse:
     """Non-LLM fallback used when GEMINI_API_KEYS is empty (or every key
     failed): a short, rule-based summary of the same context block, so
     KrishiBot still says something useful about the actual farm rather than
@@ -372,6 +389,13 @@ def _scripted_reply(context: dict, language: str) -> AdvisorAskResponse:
         answer = "I don't have enough data for this farm yet to answer that."
     else:
         answer = " ".join(lines)
+    if ai_unavailable:
+        # Gemini is configured but couldn't answer -- say so, otherwise a
+        # farm summary in reply to e.g. "hello" reads like a broken bot.
+        answer = (
+            "KrishiBot AI is busy right now and couldn't answer your question directly -- "
+            "please ask again in a minute. Meanwhile, here's the latest on your farm: " + answer
+        )
     if language.strip().lower() not in ("en", "english", ""):
         answer += (
             " (KrishiBot is running in scripted mode right now, so this reply is in English only --"

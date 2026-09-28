@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # fallback instead of erroring.
     GEMINI_API_KEYS: str = ""
     GEMINI_MODEL: str = "gemini-3.6-flash"
+    # Tried in order (with every key) when GEMINI_MODEL is overloaded,
+    # retired, or out of quota on all keys. Free-tier quota is counted per
+    # model, so each fallback is fresh quota on the same keys.
+    GEMINI_FALLBACK_MODELS: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     # Per-user cap on POST /farms/{id}/ask. In-memory (see
     # AdvisorService's _RateLimiter) -- single process, resets on restart.
     ADVISOR_RATE_LIMIT_PER_HOUR: int = 20
@@ -133,6 +137,11 @@ class Settings(BaseSettings):
     @property
     def gemini_api_keys(self) -> list[str]:
         return _csv(self.GEMINI_API_KEYS)
+
+    @property
+    def gemini_models(self) -> list[str]:
+        models = [self.GEMINI_MODEL.strip(), *_csv(self.GEMINI_FALLBACK_MODELS)]
+        return list(dict.fromkeys(m for m in models if m))
 
 
 def _csv(value: str) -> list[str]:
