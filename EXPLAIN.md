@@ -1382,8 +1382,13 @@ that farm's already-computed data — never general agronomy knowledge, never an
   covering a hypothetical). A `5xx` (Google's own "high demand" overload) gets one short in-place
   retry on the *same* key with backoff before moving on, since that's the model being momentarily
   overloaded, not the key; a `429` moves straight to the next key with no retry, since it means this
-  key/project's own quota is exhausted, which a couple of seconds of backoff can't fix. Only raises
-  `GeminiRequestError` once every key has failed (after retries). `GeminiNotConfiguredError` is a
+  key/project's own quota is exhausted, which a couple of seconds of backoff can't fix. A key that
+  hit a `429` is pushed to the back of the order for that model (1 hour for a daily quota, 5 minutes
+  otherwise; in-memory, resets on restart) so later requests don't pay a failed round-trip on it
+  first. If the model itself is the problem — still overloaded after the retry, or `404` retired for
+  these keys — the same keys are tried on each `GEMINI_FALLBACK_MODELS` entry (§7); free-tier quota
+  is per model, so a fallback model is also fresh quota on keys that are exhausted on the primary.
+  Only raises `GeminiRequestError` once every key has failed on every model (after retries). `GeminiNotConfiguredError` is a
   distinct case (list is empty) so callers can tell "not set up" from "set up but broken." Runs off
   the event loop via `asyncio.to_thread` in `AdvisorService.ask` (the SDK's HTTP client is
   synchronous, and now sometimes sleeps mid-call for retries — either would otherwise block every
@@ -1669,6 +1674,7 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `GEE_SERVICE_ACCOUNT_EMAIL` / `GEE_KEY_PATH` | Backend | Optional production auth path (service-account key). Leave both blank to use local Application Default Credentials instead (§5.5) — that's the dev setup today |
 | `GEMINI_API_KEYS` | Backend | Comma-separated Gemini API key(s) for the AI Advisor / KrishiBot (§5.19). `GeminiClient` tries each in order, falling through on a quota/auth/other error. Blank = KrishiBot runs in its scripted (non-LLM) fallback mode instead |
 | `GEMINI_MODEL` | Backend | Gemini model id used for `POST /farms/{id}/ask` (default `gemini-3.6-flash` — Google retired `gemini-2.5-flash` for new API keys) |
+| `GEMINI_FALLBACK_MODELS` | Backend | Comma-separated models tried, with every key, when `GEMINI_MODEL` is overloaded, retired or out of quota (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `ADVISOR_RATE_LIMIT_PER_HOUR` | Backend | Per-user cap on `POST /farms/{id}/ask` (default `20`) — in-memory, resets on restart (§5.19) |
 
 ---
@@ -1759,7 +1765,7 @@ npm run dev    # http://localhost:3000
 | NDVI/NDWI/EVI timeseries + automated alerts (backend) | ✅ Real — nightly `AsyncIOScheduler` job rebuilds every farm's history from Sentinel-2 and runs 3 alert rules (NDVI drop, below-benchmark, water stress); `GET .../timeseries` and `GET .../alerts` are real, working endpoints; see §5.9 |
 | NDVI season curve + pass-date slider | ✅ Real for real farms — Recharts chart of `GET .../timeseries` (field vs. dashed benchmark, dot per pass, date + cloud % tooltip) and a slider that swaps the map layers per pass; guests see the demo curve, labelled "Demo data"; see §5.12 |
 | Satellite alerts on the Dashboard | ✅ Real for real farms — alerts strip over `GET .../alerts` with mark-as-read (`PATCH /alerts/{id}/read`); see §5.12 |
-| Source badges on satellite numbers | ✅ Real — "Live — Sentinel-2, 20 Sep, cloud 0.3%" / "· regional" / "Demo data" on every satellite value; see §5.12 |
+| Source badges on satellite numbers | ✅ Real — one "Live — Sentinel-2, 20 Sep, cloud 0.3%" (or "Demo data") badge in the Satellite map's top-right corner; the per-card Sentinel-2/SMAP/CHIRPS/MODIS badges were removed as clutter. The environment card's soil section still says whether values are from the farmer's Soil Health Card or estimated from satellite soil maps; see §5.12 |
 | Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
@@ -1768,7 +1774,8 @@ npm run dev    # http://localhost:3000
 | Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms. The crop selector is capped at five crops app-wide (Rice, Wheat, Onion, Sugarcane, Potato, §5.16); Sugarcane has no real mandi data anywhere (mills buy it directly, not via APMC auctions) and honestly says so instead of faking a number |
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
 | Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
-| Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
+| Dashboard "Agri News" cards / Smart Suggestion / Harvest Estimation / weather "Field Advisory" | ❌ Removed — all were sample/generated text, not real data. The public `/weather` page (was a hard-coded forecast) now shows the signed-in user's live farm forecast, or a sign-in prompt; `/features`, `/help`, the home page and the footer were cut back to features that actually exist |
+| Farm state/district | ✅ Real — reverse-geocoded (Mapbox) from the drawn boundary's centroid when a farm is registered. Previously hard-coded to "Maharashtra", which sent mandi-price lookups to the wrong state |
 | Irrigation recommendation | ✅ Real — `GET /farms/{id}/irrigation` computes a FAO-56 root-zone water balance (depletion vs. readily available water) from CHIRPS/Open-Meteo history + forecast, soil texture, and optionally NDVI; `POST .../irrigation/log` records farmer irrigation; see §5.18. Wired into the **Dashboard's** Canopy Moisture card for real farms (`useFarmIrrigation`, `SourceBadge`); the **Satellite page's** irrigation card and the log-entry UI still show/use `farmStore.ts`'s synthetic data |
 | Fields / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |

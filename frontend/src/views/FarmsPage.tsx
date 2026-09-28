@@ -32,6 +32,36 @@ const STEPS = ["Farm Details", "Crop & Soil", "Draw on Map", "Done"];
 
 type SoilLevel = Farm["soil"]["nitrogen"];
 
+function polygonCentroid(
+  polygon: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>
+): [number, number] | null {
+  const ring =
+    polygon.geometry.type === "Polygon" ? polygon.geometry.coordinates[0] : polygon.geometry.coordinates[0]?.[0];
+  if (!ring || ring.length === 0) return null;
+  const [sumLng, sumLat] = ring.reduce(([a, b], [lng, lat]) => [a + lng, b + lat], [0, 0]);
+  return [sumLng / ring.length, sumLat / ring.length];
+}
+
+/** State and district of a point, via Mapbox reverse geocoding. Either can
+ * come back null (no token, network error, or Mapbox has no match) -- the
+ * farm is then saved without it rather than with a made-up default. */
+async function reverseGeocodeRegion([lng, lat]: [number, number]): Promise<{ state: string | null; district: string | null }> {
+  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  try {
+    const res = await fetch(
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&types=region,district`
+    );
+    const data = await res.json();
+    const features: { place_type: string[]; text: string }[] = data.features ?? [];
+    return {
+      state: features.find((f) => f.place_type.includes("region"))?.text ?? null,
+      district: features.find((f) => f.place_type.includes("district"))?.text ?? null,
+    };
+  } catch {
+    return { state: null, district: null };
+  }
+}
+
 const blankForm = {
   name: "", address: "", crop: "", plantingDate: "", area: "",
   hasSoilReport: false,
@@ -132,15 +162,21 @@ function RegisterFarmModal({
   async function handleSave() {
     const acres = parseFloat(form.area) || 2.5;
 
+    // State/district come from the farm's actual location on the map, not
+    // a hard-coded default -- mandi prices are looked up by them.
+    const center = (drawnPolygon && polygonCentroid(drawnPolygon)) || geocodedCenter || [73.8567, 18.5204];
+    setSaving(true);
+    const region = await reverseGeocodeRegion(center);
+
     const draft: FarmDraft = {
       name: form.name.trim() || "My New Farm",
-      address: form.address.trim() || "Maharashtra, India",
-      district: form.address.split(",")[0]?.trim() || "Rural",
-      state: "Maharashtra",
+      address: form.address.trim(),
+      district: region.district ?? "",
+      state: region.state ?? "",
       crop: form.crop || "Rice",
-      variety: "High-Yield Local",
+      variety: "",
       plantingDate: form.plantingDate || today,
-      center: geocodedCenter || [73.8567, 18.5204],
+      center,
       polygonGeoJson: drawnPolygon,
       soilOverride: form.hasSoilReport
         ? {
@@ -579,7 +615,7 @@ function ConfirmDeleteModal({
             <div>
               <h3 className="font-bold text-farm-dark text-sm">Delete this farm?</h3>
               <p className="text-xs text-farm-muted mt-1">
-                <strong>{farm.name}</strong> and all of its satellite, soil, and yield data will be
+                <strong>{farm.name}</strong> and all of its satellite, soil, and weather data will be
                 permanently removed. This can't be undone.
               </p>
             </div>
@@ -716,7 +752,8 @@ export default function FarmsPage() {
                 {/* Crop details */}
                 <div className="flex items-center justify-between text-xs text-farm-muted">
                   <span className="flex items-center gap-1 font-semibold text-farm-dark">
-                    <Leaf className="w-3.5 h-3.5 text-farm-green" /> {farm.crop} ({farm.variety})
+                    <Leaf className="w-3.5 h-3.5 text-farm-green" /> {farm.crop}
+                    {farm.variety ? ` (${farm.variety})` : ""}
                   </span>
                   <span className="flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5" /> Planted {farm.plantingDate}

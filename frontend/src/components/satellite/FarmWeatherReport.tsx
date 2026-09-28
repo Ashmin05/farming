@@ -3,19 +3,18 @@
 // ==============================================================================
 // 🌦️ FARM WEATHER REPORT & 10-DAY FORECAST COMPONENT
 // ==============================================================================
-// Used in: /satellite (Satellite Analysis Page per farm)
+// Used in: /dashboard and /weather
 // Features:
-// - Live/Hyperlocal metrics (Temp, Humidity, Wind, Pressure, UV, Rain)
-// - Weather alerts with severity and actionable agricultural advice
-// - Interactive 10-day forecast day-selector with farm-specific advisories
-// - Ready for backend API hook-up (e.g. Open-Meteo, IMD, or FastAPI endpoint)
+// - Today's forecast for the farm (temp, sky, humidity, wind, UV) from Open-Meteo
+// - Heavy-rain / heat-stress alerts derived from the forecast flags
+// - Interactive 10-day forecast day-selector
 // ==============================================================================
 
 import { useState } from "react";
 import {
   Cloud, CloudRain, CloudLightning, Sun, CloudSun, CloudDrizzle,
   Wind, Droplets, Thermometer, AlertTriangle, ShieldAlert,
-  Calendar, CheckCircle2, Gauge, SunMedium, type LucideIcon
+  Calendar, SunMedium, type LucideIcon
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -161,7 +160,7 @@ export default function FarmWeatherReport({
             {isLive
               ? fetchedAt
                 ? `Live · fetched ${new Date(fetchedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`
-                : "Live Weather Station Active"
+                : "Live forecast"
               : "Demo data · sign in for a live forecast"}
           </span>
         </div>
@@ -171,17 +170,16 @@ export default function FarmWeatherReport({
         {/* ── Current Conditions Stats Grid ── */}
         <div>
           <h4 className="text-xs font-bold text-farm-muted uppercase tracking-wider mb-3">
-            Current Farm Conditions
+            Today at your farm
           </h4>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {/* Temp */}
             <div className="p-3 bg-farm-gray/70 hover:bg-farm-gray rounded-xl border border-farm-border-color/60 transition-colors">
               <div className="flex items-center justify-between text-orange-600 mb-1">
-                <span className="text-xs font-medium text-farm-muted">Temp</span>
+                <span className="text-xs font-medium text-farm-muted">High</span>
                 <Thermometer className="w-4 h-4" />
               </div>
               <p className="text-xl font-bold text-farm-dark">{weather.currentTemp}°C</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">Feels {weather.feelsLike}°C</p>
             </div>
 
             {/* Condition */}
@@ -213,7 +211,7 @@ export default function FarmWeatherReport({
                 <Wind className="w-4 h-4" />
               </div>
               <p className="text-xl font-bold text-farm-dark">{weather.windKmh} <span className="text-xs font-normal">km/h</span></p>
-              <p className="text-[11px] text-farm-muted mt-0.5">Dir: {weather.windDir}</p>
+              <p className="text-[11px] text-farm-muted mt-0.5">Max today</p>
             </div>
 
             {/* UV Index */}
@@ -228,15 +226,6 @@ export default function FarmWeatherReport({
               </p>
             </div>
 
-            {/* Pressure */}
-            <div className="p-3 bg-farm-gray/70 hover:bg-farm-gray rounded-xl border border-farm-border-color/60 transition-colors">
-              <div className="flex items-center justify-between text-indigo-600 mb-1">
-                <span className="text-xs font-medium text-farm-muted">Pressure</span>
-                <Gauge className="w-4 h-4" />
-              </div>
-              <p className="text-xl font-bold text-farm-dark">{weather.pressureHpa}</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">hPa (Barometer)</p>
-            </div>
           </div>
         </div>
 
@@ -293,7 +282,7 @@ export default function FarmWeatherReport({
               <Calendar className="w-4 h-4 text-farm-green" />
               {weather.forecast10Days.length}-Day Precipitation & Thermal Forecast
             </h4>
-            <span className="text-xs text-farm-muted">Click a day for crop advice</span>
+            <span className="text-xs text-farm-muted">Click a day for details</span>
           </div>
 
           {/* Horizontal scrollable forecast strip */}
@@ -381,15 +370,6 @@ export default function FarmWeatherReport({
                     <span>UV: <strong className="text-farm-dark">{activeDay.uvIndex}</strong></span>
                   </div>
                 </div>
-              </div>
-
-              {/* Advisory Text */}
-              <div className="pt-3 flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-farm-green flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-farm-dark leading-relaxed font-medium">
-                  <strong className="text-farm-green-dark">Field Advisory for {crop}:</strong>{" "}
-                  {activeDay.farmingAdvisory}
-                </p>
               </div>
             </div>
           )}

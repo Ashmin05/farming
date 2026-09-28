@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare, LogIn } from "lucide-react";
+import { Brain, Send, X, Sprout, Loader2, Maximize2, LogIn } from "lucide-react";
 import { isAuthenticated } from "@/lib/auth/auth-client";
 import { formatPassDate } from "@/components/SourceBadge";
 import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
@@ -156,11 +156,25 @@ export default function KrishiBotWidget() {
                     ? <Sprout className="w-3.5 h-3.5 text-white" />
                     : <span className="text-purple-700 text-xs font-bold">Y</span>}
                 </div>
-                <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${msg.role === "user"
+                <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap break-words ${msg.role === "user"
                     ? "bg-farm-green text-white rounded-tr-sm"
                     : "bg-white text-farm-dark rounded-tl-sm shadow-sm border border-farm-border-color"
                   }`}>
                   {msg.content}
+                  {msg.actionPoints && msg.actionPoints.length > 0 && (
+                    <ul className="mt-1.5 list-disc list-inside space-y-0.5">
+                      {msg.actionPoints.map((point, i) => <li key={i}>{point}</li>)}
+                    </ul>
+                  )}
+                  {msg.warnings && msg.warnings.length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      {msg.warnings.map((warning, i) => (
+                        <p key={i} className="text-[11px] font-semibold text-amber-800 bg-amber-100 rounded-lg px-2 py-1">
+                          ⚠ {warning}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   {msg.sources && msg.sources.length > 0 && (
                     <p className="mt-1.5 pt-1.5 border-t border-farm-border-color text-[10px] text-farm-muted">
                       Based on: {msg.sources.map((s) => (s.as_of ? `${s.label} ${formatPassDate(s.as_of)}` : s.label)).join(", ")}
@@ -182,26 +196,6 @@ export default function KrishiBotWidget() {
             )}
             <div ref={bottomRef} />
           </div>
-
-          {/* Quick questions */}
-          {messages.length <= 1 && (
-            <div className="px-3 pb-2 bg-white border-t border-farm-border-color">
-              <p className="text-xs text-farm-muted mt-2 mb-1.5 flex items-center gap-1">
-                <MessageSquare className="w-3 h-3" /> Quick questions:
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {["Yellow leaves on wheat?", "Rice water schedule?", "Onion pest control?"].map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => handleSend(q)}
-                    className="text-xs bg-farm-green-light border border-farm-border-color px-2 py-1 rounded-full text-farm-dark hover:border-farm-green hover:text-farm-green transition-all"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Input */}
           <div className="flex-shrink-0 p-3 bg-white border-t border-farm-border-color">

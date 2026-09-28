@@ -5,8 +5,8 @@
 // ==============================================================================
 // Route URL: /ai-chat
 // App Router Entry: src/app/ai-chat/page.tsx
-// Description: Interactive AI farming assistant supporting multi-lingual Q&A,
-// disease diagnosis, field advisory, and preset starter farming queries.
+// Description: Interactive AI farming assistant answering questions about a
+// farm from its own satellite, weather, irrigation and mandi data.
 // ==============================================================================
 
 import { useState, useRef, useEffect, Suspense } from "react";
@@ -16,18 +16,9 @@ import { isAuthenticated } from "@/lib/auth/auth-client";
 import { formatPassDate } from "@/components/SourceBadge";
 import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 import {
-  Brain, Send, Sprout, Mic, Paperclip,
-  Loader2, RefreshCw, MessageSquare
+  Brain, Send, Sprout,
+  Loader2, RefreshCw
 } from "lucide-react";
-
-const STARTER_QUESTIONS = [
-  "Yellow leaf tips on wheat: disease or nutrient deficiency?",
-  "Best water and fertiliser schedule for Rice at tillering stage?",
-  "How to control thrips and purple blotch in Onion?",
-  "Tomato leaf curl virus: causes and prevention steps?",
-  "Recommended drip irrigation interval for Sugarcane in dry weather?",
-  "What is the current mandi MSP and market rate for Wheat?",
-];
 
 function ChatContent() {
   const searchParams = useSearchParams();
@@ -41,7 +32,7 @@ function ChatContent() {
       id: "welcome",
       role: "assistant",
       content:
-        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI can help you with:\n• Crop health & disease diagnosis (Rice, Wheat, Onion, Sugarcane, Potato)\n• Fertiliser and precision irrigation advice\n• Mandi market prices and best selling time\n• Weather warnings and seasonal field advisories\n\nAsk me anything in English, বাংলা (Bengali), or हिंदी (Hindi)!",
+        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI answer questions about your farm using its own data:\n• Satellite crop health (NDVI) and stress alerts\n• Irrigation timing and amount\n• Weather forecast for your field\n• Mandi prices and the sell-or-hold suggestion\n\nAsk in English, বাংলা (Bengali), or हिंदी (Hindi).",
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -201,26 +192,6 @@ function ChatContent() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Starter questions */}
-        {messages.length <= 2 && !loading && (
-          <div className="flex-shrink-0 pt-3">
-            <p className="text-xs text-farm-muted mb-2 flex items-center gap-1 font-medium">
-              <MessageSquare className="w-3.5 h-3.5" /> Common questions:
-            </p>
-            <div className="flex gap-2 flex-wrap">
-              {STARTER_QUESTIONS.slice(0, 4).map((q) => (
-                <button
-                  key={q}
-                  onClick={() => sendMessage(q)}
-                  className="text-xs bg-white border border-farm-border-color px-3 py-1.5 rounded-full text-farm-dark hover:border-farm-green hover:text-farm-green transition-all hover:bg-farm-green-light"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Input box */}
         <div className="flex-shrink-0 pt-3">
           <div className="flex gap-2 items-end bg-white border border-farm-border-color rounded-2xl px-4 py-3 focus-within:border-farm-green focus-within:ring-1 focus-within:ring-farm-green transition-all">
@@ -228,17 +199,11 @@ function ChatContent() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask about Rice, Wheat, Onion, Tomato, Sugarcane… (Enter to send)"
+              placeholder="Ask about your crop health, irrigation, weather or mandi price… (Enter to send)"
               rows={2}
               className="flex-1 resize-none text-sm text-farm-dark placeholder-farm-muted focus:outline-none bg-transparent leading-relaxed"
             />
             <div className="flex items-center gap-2 flex-shrink-0">
-              <button className="p-1.5 rounded-lg text-farm-muted hover:text-farm-green hover:bg-farm-green-light transition-all" title="Voice input">
-                <Mic className="w-4 h-4" />
-              </button>
-              <button className="p-1.5 rounded-lg text-farm-muted hover:text-farm-green hover:bg-farm-green-light transition-all" title="Attach photo">
-                <Paperclip className="w-4 h-4" />
-              </button>
               <button
                 onClick={() => sendMessage()}
                 disabled={!input.trim() || loading}
@@ -249,7 +214,7 @@ function ChatContent() {
             </div>
           </div>
           <p className="text-center text-xs text-farm-muted mt-2">
-            KrishiBot provides advisories based on agricultural science and live field data.
+            KrishiBot answers from your farm&apos;s own satellite, weather, irrigation and mandi data.
           </p>
         </div>
       </div>
