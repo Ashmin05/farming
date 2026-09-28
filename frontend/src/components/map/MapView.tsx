@@ -9,6 +9,14 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import { Layers, Trash2, Edit3, AlertCircle, X } from "lucide-react";
 
+export interface MapViewStressZone {
+  id: string;
+  type: string; // "water_stress" | "nutrient_pest_suspected"
+  areaHa: number;
+  geometry: GeoJSON.Geometry;
+  action: string;
+}
+
 export interface MapViewProps {
   onFieldDrawn?: (
     geojson: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null,
@@ -18,9 +26,20 @@ export interface MapViewProps {
   initialCenter?: [number, number]; // [lng, lat]
   initialZoom?: number;
   flyToCenter?: [number, number];  // fly to without re-mounting map
+  /** Fit the view to this polygon's bounding box without re-mounting the map
+   * (e.g. switching between farms on a read-only analysis view) -- shows the
+   * whole registered field, not the surrounding area. Takes precedence over
+   * flyToCenter whenever both are passed. */
+  fitToPolygonGeoJson?: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
   showDrawControls?: boolean;      // false = view-only map, no draw toolbar
   className?: string;
   height?: string | number;
+  /** XYZ tile URL template (e.g. an Earth Engine getMapId() tile_fetcher
+   * url_format) drawn as a raster overlay. Pass null/undefined to clear it. */
+  rasterTileUrl?: string | null;
+  /** Stress zone polygons drawn as a colored fill + outline, each with a
+   * click popup showing its type/area/suggested action. */
+  stressZones?: MapViewStressZone[];
 }
 
 function MapViewInner({
@@ -29,9 +48,12 @@ function MapViewInner({
   initialCenter = [78.9629, 20.5937],
   initialZoom = 4.5,
   flyToCenter,
+  fitToPolygonGeoJson,
   showDrawControls = true,
   className = "",
   height = "500px",
+  rasterTileUrl,
+  stressZones,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -50,6 +72,10 @@ function MapViewInner({
   const initialPolygonRef = useRef(initialPolygon);
   const initialCenterRef = useRef(initialCenter);
   const initialZoomRef = useRef(initialZoom);
+  const flyToCenterRef = useRef(flyToCenter);
+  flyToCenterRef.current = flyToCenter;
+
+  const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -62,44 +88,67 @@ function MapViewInner({
     setTokenMissing(false);
     mapboxgl.accessToken = token;
 
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/satellite-streets-v12",
-      center: initialCenterRef.current,
-      zoom: initialZoomRef.current,
-      attributionControl: true,
-    });
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/satellite-streets-v12",
+        center: flyToCenterRef.current ?? initialCenterRef.current,
+        zoom: flyToCenterRef.current ? 14 : initialZoomRef.current,
+        attributionControl: true,
+      });
+    } catch (err) {
+      // Most commonly thrown when WebGL is disabled or unsupported
+      console.error("Mapbox failed to initialise:", err);
+      setMapError("The map could not start. Your browser may have WebGL / hardware acceleration turned off.");
+      return;
+    }
 
     mapRef.current = map;
+
+    map.on("error", (e: { error?: { status?: number; message?: string } }) => {
+      const status = e.error?.status;
+      if (status === 401 || status === 403) {
+        setMapError("Mapbox rejected the access token. Check NEXT_PUBLIC_MAPBOX_TOKEN (and its URL restrictions) in .env.local, then restart the dev server.");
+      } else {
+        console.warn("Mapbox error:", e.error?.message ?? e);
+      }
+    });
 
     // Add navigation control (zoom and rotation)
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    // Initialize Mapbox GeolocateControl for live user GPS tracking
-    const geolocate = new mapboxgl.GeolocateControl({
-      positionOptions: {
-        enableHighAccuracy: true,
-      },
-      trackUserLocation: false,
-      showUserHeading: false,
-    });
+    // Live GPS "find me" control -- only during farm registration (drawing a
+    // new field boundary), where it helps the user locate themselves on the
+    // map. Read-only/analysis views always show the farm's registered
+    // location instead, never the device's current position.
+    let geolocate: mapboxgl.GeolocateControl | null = null;
+    if (showDrawControls) {
+      geolocate = new mapboxgl.GeolocateControl({
+        positionOptions: {
+          enableHighAccuracy: true,
+        },
+        trackUserLocation: false,
+        showUserHeading: false,
+      });
 
-    geolocateRef.current = geolocate;
-    map.addControl(geolocate, "top-right");
+      geolocateRef.current = geolocate;
+      map.addControl(geolocate, "top-right");
 
-    geolocate.on("error", (error: { code?: number; message?: string }) => {
-      if (error && error.code === 1) {
-        setLocationError("Location permission denied. Please allow location access in your browser to view your live GPS position.");
-      } else if (error && error.code === 2) {
-        setLocationError("GPS location is unavailable on this device.");
-      } else if (error && error.message) {
-        setLocationError(error.message);
-      }
-    });
+      geolocate.on("error", (error: { code?: number; message?: string }) => {
+        if (error && error.code === 1) {
+          setLocationError("Location permission denied. Please allow location access in your browser to view your live GPS position.");
+        } else if (error && error.code === 2) {
+          setLocationError("GPS location is unavailable on this device.");
+        } else if (error && error.message) {
+          setLocationError(error.message);
+        }
+      });
 
-    geolocate.on("geolocate", () => {
-      setLocationError(null);
-    });
+      geolocate.on("geolocate", () => {
+        setLocationError(null);
+      });
+    }
 
     // Initialize MapboxDraw — hide native control buttons since we use our own overlay buttons
     const draw = new MapboxDraw({
@@ -196,8 +245,9 @@ function MapViewInner({
         } catch {
           // fallback if bbox calculation fails
         }
-      } else {
-        // Only auto-locate on first load if no polygon is set
+      } else if (geolocate && !flyToCenterRef.current) {
+        // Only auto-locate when the caller gave no polygon or target location —
+        // otherwise GPS would pull the map away from the farm/village being shown
         if (typeof window !== "undefined" && "geolocation" in navigator) {
           try {
             geolocate.trigger();
@@ -239,6 +289,167 @@ function MapViewInner({
     }
   }, [flyToCenter]);
 
+  // Fit the view to a farm polygon's bounds -- e.g. switching the farm on a
+  // read-only satellite analysis view -- without re-initialising the map.
+  useEffect(() => {
+    if (!fitToPolygonGeoJson || !mapRef.current) return;
+    const map = mapRef.current;
+    const fit = () => {
+      try {
+        if (drawRef.current) {
+          drawRef.current.deleteAll();
+          drawRef.current.add(fitToPolygonGeoJson);
+        }
+        const bbox = turf.bbox(fitToPolygonGeoJson);
+        map.fitBounds(
+          [
+            [bbox[0], bbox[1]],
+            [bbox[2], bbox[3]],
+          ],
+          { padding: 60, maxZoom: 17, duration: 1200 }
+        );
+      } catch (err) {
+        console.warn("Failed to fit map to polygon bounds:", err);
+      }
+    };
+    if (map.isStyleLoaded()) {
+      fit();
+    } else {
+      map.once("load", fit);
+    }
+  }, [fitToPolygonGeoJson]);
+
+  // Raster overlay (e.g. an Earth Engine NDVI/NDWI/stress tile layer) —
+  // added/replaced without re-mounting the map whenever the tile URL changes.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const RASTER_SOURCE_ID = "ee-raster-source";
+    const RASTER_LAYER_ID = "ee-raster-layer";
+
+    const applyRaster = () => {
+      if (map.getLayer(RASTER_LAYER_ID)) map.removeLayer(RASTER_LAYER_ID);
+      if (map.getSource(RASTER_SOURCE_ID)) map.removeSource(RASTER_SOURCE_ID);
+      if (!rasterTileUrl) return;
+
+      map.addSource(RASTER_SOURCE_ID, {
+        type: "raster",
+        tiles: [rasterTileUrl],
+        tileSize: 256,
+      });
+      map.addLayer({
+        id: RASTER_LAYER_ID,
+        type: "raster",
+        source: RASTER_SOURCE_ID,
+        paint: { "raster-opacity": 0.85 },
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      applyRaster();
+    } else {
+      map.once("load", applyRaster);
+    }
+  }, [rasterTileUrl]);
+
+  // Stress zone polygons — colored by type, with a click popup. The click
+  // handler is stable across re-renders (it only reads data off the clicked
+  // feature itself, never a captured `stressZones` value), so it's safe to
+  // attach once per layer without leaking duplicate listeners.
+  const zoneClickHandlerRef = useRef<((e: mapboxgl.MapLayerMouseEvent) => void) | null>(null);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const ZONES_SOURCE_ID = "stress-zones-source";
+    const ZONES_FILL_LAYER_ID = "stress-zones-fill";
+    const ZONES_LINE_LAYER_ID = "stress-zones-outline";
+
+    const applyZones = () => {
+      if (zoneClickHandlerRef.current) {
+        map.off("click", ZONES_FILL_LAYER_ID, zoneClickHandlerRef.current);
+        zoneClickHandlerRef.current = null;
+      }
+      if (map.getLayer(ZONES_FILL_LAYER_ID)) map.removeLayer(ZONES_FILL_LAYER_ID);
+      if (map.getLayer(ZONES_LINE_LAYER_ID)) map.removeLayer(ZONES_LINE_LAYER_ID);
+      if (map.getSource(ZONES_SOURCE_ID)) map.removeSource(ZONES_SOURCE_ID);
+
+      if (!stressZones || stressZones.length === 0) return;
+
+      const featureCollection: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: stressZones.map((zone) => ({
+          type: "Feature",
+          geometry: zone.geometry,
+          properties: { id: zone.id, type: zone.type, areaHa: zone.areaHa, action: zone.action },
+        })),
+      };
+
+      map.addSource(ZONES_SOURCE_ID, { type: "geojson", data: featureCollection });
+      map.addLayer({
+        id: ZONES_FILL_LAYER_ID,
+        type: "fill",
+        source: ZONES_SOURCE_ID,
+        paint: {
+          "fill-color": [
+            "match", ["get", "type"],
+            "water_stress", "#0ea5e9",
+            "nutrient_pest_suspected", "#f97316",
+            "#ef4444",
+          ],
+          "fill-opacity": 0.35,
+        },
+      });
+      map.addLayer({
+        id: ZONES_LINE_LAYER_ID,
+        type: "line",
+        source: ZONES_SOURCE_ID,
+        paint: {
+          "line-color": [
+            "match", ["get", "type"],
+            "water_stress", "#0284c7",
+            "nutrient_pest_suspected", "#ea580c",
+            "#dc2626",
+          ],
+          "line-width": 2,
+        },
+      });
+
+      const handleClick = (e: mapboxgl.MapLayerMouseEvent) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        const props = feature.properties as { type: string; areaHa: number; action: string };
+        const label = props.type === "water_stress" ? "Water Stress" : "Nutrient/Pest Suspected";
+        new mapboxgl.Popup({ closeButton: true, maxWidth: "240px" })
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font-size:12px;line-height:1.5">
+              <strong>${label}</strong><br/>
+              Area: ${Number(props.areaHa).toFixed(2)} ha<br/>
+              <span style="color:#555">${props.action}</span>
+            </div>`
+          )
+          .addTo(map);
+      };
+      zoneClickHandlerRef.current = handleClick;
+      map.on("click", ZONES_FILL_LAYER_ID, handleClick);
+      map.on("mouseenter", ZONES_FILL_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", ZONES_FILL_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "";
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      applyZones();
+    } else {
+      map.once("load", applyZones);
+    }
+  }, [stressZones]);
+
   const handleStartDraw = () => {
     if (drawRef.current) {
       // Clear any previous polygon before drawing new one
@@ -274,6 +485,16 @@ function MapViewInner({
           <span>
             <strong>NEXT_PUBLIC_MAPBOX_TOKEN</strong> is not set. Add your public token in <code>.env.local</code> to render satellite tiles.
           </span>
+        </div>
+      )}
+
+      {/* Map Load Error Banner */}
+      {mapError && (
+        <div className="absolute inset-0 z-20 bg-farm-gray flex items-center justify-center p-6">
+          <div className="flex items-start gap-2 max-w-md text-sm text-farm-dark">
+            <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <span>{mapError}</span>
+          </div>
         </div>
       )}
 
@@ -360,7 +581,7 @@ function MapViewInner({
 export const MapView = dynamic(() => Promise.resolve(MapViewInner), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-[500px] bg-farm-gray rounded-2xl flex items-center justify-center text-farm-muted border border-farm-border-color">
+    <div className="w-full h-full min-h-[300px] bg-farm-gray rounded-2xl flex items-center justify-center text-farm-muted border border-farm-border-color">
       <div className="flex flex-col items-center gap-3">
         <div className="w-8 h-8 border-3 border-farm-green border-t-transparent rounded-full animate-spin" />
         <span className="text-sm font-medium">Loading satellite map...</span>

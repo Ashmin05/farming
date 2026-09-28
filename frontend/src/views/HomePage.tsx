@@ -11,13 +11,20 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { ArrowRight, MapPin, Satellite, CloudRain, Brain, TrendingUp, Wheat, ChevronRight, LogIn } from "lucide-react";
+import { ArrowRight, MapPin, Satellite, CloudRain, Brain, TrendingUp, Wheat, ChevronRight, LogIn, LayoutDashboard } from "lucide-react";
 import { useLanguage } from "@/lib/LanguageContext";
+import { isAuthenticated } from "@/lib/auth/auth-client";
 
 export default function HomePage() {
   const { t } = useLanguage();
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    setAuthed(isAuthenticated());
+  }, []);
 
   const howItWorks = [
     { step: "01", title: t.step1Title, desc: t.step1Desc, icon: MapPin },
@@ -49,7 +56,7 @@ export default function HomePage() {
     {
       label: t.viewOnGround,
       desc: t.viewOnGroundDesc,
-      image: "/images/field_soil.jpg",
+      image: "/images/field_farmer.jpg",
       tag: "SoilGrids / Farmer",
     },
     {
@@ -64,8 +71,8 @@ export default function HomePage() {
     t.cropRice,
     t.cropWheat,
     t.cropOnion,
-    t.cropTomato,
     t.cropSugarcane,
+    t.cropPotato,
   ];
 
   return (
@@ -103,11 +110,11 @@ export default function HomePage() {
 
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/login"
+                href={authed ? "/dashboard" : "/login"}
                 className="inline-flex items-center justify-center gap-2 bg-amber-400 text-farm-dark px-6 py-3.5 rounded-xl font-bold hover:bg-amber-500 transition-all duration-200 shadow-hero text-base group"
               >
-                <LogIn className="w-4 h-4" />
-                {t.btnLogin}
+                {authed ? <LayoutDashboard className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
+                {authed ? "Go to Dashboard" : t.btnLogin}
               </Link>
               <Link
                 href="/features"
@@ -115,12 +122,6 @@ export default function HomePage() {
               >
                 {t.btnExplore}
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </Link>
-              <Link
-                href="/ai-chat"
-                className="inline-flex items-center justify-center gap-2 bg-white/15 backdrop-blur-sm text-white px-5 py-3.5 rounded-xl font-semibold border border-white/30 hover:bg-white/25 transition-all duration-200 text-base"
-              >
-                {t.btnAskBot}
               </Link>
             </div>
           </div>

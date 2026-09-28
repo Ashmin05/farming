@@ -96,6 +96,7 @@ function SatelliteTab({
           initialCenter={initialCenter}
           initialZoom={16}
           initialPolygon={fieldPolygon}
+          showDrawControls={false}
         />
       </div>
 

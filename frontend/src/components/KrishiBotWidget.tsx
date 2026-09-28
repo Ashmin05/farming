@@ -11,10 +11,12 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare } from "lucide-react";
-import { apiClient, type ChatMessage } from "@/lib/api";
+import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare, LogIn } from "lucide-react";
+import { isAuthenticated } from "@/lib/auth/auth-client";
+import { formatPassDate } from "@/components/SourceBadge";
+import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 
-const WELCOME: ChatMessage = {
+const WELCOME: KrishiBotMessage = {
   id: "welcome",
   role: "assistant",
   content: "Namaste! 🌾 I'm KrishiBot AI. Ask me about crop health, irrigation, pests, or market prices.",
@@ -24,10 +26,16 @@ const WELCOME: ChatMessage = {
 export default function KrishiBotWidget() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
+  const [authed, setAuthed] = useState(false);
+  const [messages, setMessages] = useState<KrishiBotMessage[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { send } = useKrishiBot(undefined, "en");
+
+  useEffect(() => {
+    setAuthed(isAuthenticated());
+  }, [pathname]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -37,29 +45,74 @@ export default function KrishiBotWidget() {
     return null;
   }
 
-  async function send(text?: string) {
+  async function handleSend(text?: string) {
     const msg = (text ?? input).trim();
     if (!msg || loading) return;
-    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: "user", content: msg, timestamp: new Date().toISOString() };
+    const userMsg: KrishiBotMessage = { id: `u-${Date.now()}`, role: "user", content: msg, timestamp: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
     try {
-      const res = await apiClient.sendChatMessage(msg, messages);
-      if (res.ok) setMessages((prev) => [...prev, res.data]);
+      const reply = await send(msg, messages);
+      setMessages((prev) => [...prev, reply]);
     } finally {
       setLoading(false);
     }
   }
 
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") { e.preventDefault(); send(); }
+    if (e.key === "Enter") { e.preventDefault(); handleSend(); }
   }
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {/* Signed-out: prompt to sign in instead of the real chat */}
+      {open && !authed && (
+        <div className="w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-farm-border-color overflow-hidden flex flex-col">
+          <div className="bg-farm-green px-4 py-3 flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
+                <Brain className="w-4 h-4 text-white" />
+              </div>
+              <p className="text-white font-bold text-sm">KrishiBot AI</p>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="p-6 flex flex-col items-center text-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-farm-green-light flex items-center justify-center">
+              <Sprout className="w-6 h-6 text-farm-green" />
+            </div>
+            <p className="text-sm font-bold text-farm-dark">Sign in to chat with KrishiBot AI</p>
+            <p className="text-xs text-farm-muted">
+              Create a free account or sign in to ask about your crop health, irrigation, pests, and market prices.
+            </p>
+            <div className="flex gap-2 w-full mt-1">
+              <Link
+                href="/login"
+                onClick={() => setOpen(false)}
+                className="flex-1 flex items-center justify-center gap-1.5 bg-farm-green text-white text-xs font-semibold py-2.5 rounded-xl hover:bg-farm-green-dark transition-all"
+              >
+                <LogIn className="w-3.5 h-3.5" /> Sign In
+              </Link>
+              <Link
+                href="/register"
+                onClick={() => setOpen(false)}
+                className="flex-1 flex items-center justify-center text-xs font-semibold py-2.5 rounded-xl border border-farm-border-color text-farm-dark hover:border-farm-green hover:text-farm-green transition-all"
+              >
+                Create Account
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Box */}
-      {open && (
+      {open && authed && (
         <div className="w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-farm-border-color overflow-hidden flex flex-col"
           style={{ height: "440px" }}>
           {/* Header */}
@@ -108,6 +161,11 @@ export default function KrishiBotWidget() {
                     : "bg-white text-farm-dark rounded-tl-sm shadow-sm border border-farm-border-color"
                   }`}>
                   {msg.content}
+                  {msg.sources && msg.sources.length > 0 && (
+                    <p className="mt-1.5 pt-1.5 border-t border-farm-border-color text-[10px] text-farm-muted">
+                      Based on: {msg.sources.map((s) => (s.as_of ? `${s.label} ${formatPassDate(s.as_of)}` : s.label)).join(", ")}
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -135,7 +193,7 @@ export default function KrishiBotWidget() {
                 {["Yellow leaves on wheat?", "Rice water schedule?", "Onion pest control?"].map((q) => (
                   <button
                     key={q}
-                    onClick={() => send(q)}
+                    onClick={() => handleSend(q)}
                     className="text-xs bg-farm-green-light border border-farm-border-color px-2 py-1 rounded-full text-farm-dark hover:border-farm-green hover:text-farm-green transition-all"
                   >
                     {q}
@@ -156,7 +214,7 @@ export default function KrishiBotWidget() {
                 className="flex-1 text-xs text-farm-dark placeholder-farm-muted bg-transparent focus:outline-none"
               />
               <button
-                onClick={() => send()}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || loading}
                 className="w-7 h-7 bg-farm-green rounded-lg flex items-center justify-center text-white hover:bg-farm-green-dark transition-all disabled:opacity-40"
               >

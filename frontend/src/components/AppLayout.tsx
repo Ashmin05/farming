@@ -1,21 +1,24 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  Sprout, LayoutDashboard, Map, Satellite, CloudRain,
+  LayoutDashboard, Map, Satellite, IndianRupee,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
-  Bell
+  UserCircle
 } from "lucide-react";
 
 import { useUserStore } from "@/lib/stores/farmStore";
+import { logout } from "@/lib/auth/auth-client";
 
 const nav = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
-  { href: "/weather", icon: CloudRain, label: "Weather" },
+  { href: "/market", icon: IndianRupee, label: "Market" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
+  { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },
 ];
 
@@ -34,13 +37,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Logo */}
         <div className="h-16 flex items-center px-5 border-b border-farm-border-color flex-shrink-0">
-          <Link href="/" className="flex items-center gap-2 group" title="Return to Homepage">
-            <div className="w-8 h-8 bg-farm-green rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
-              <Sprout className="w-4 h-4 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-farm-dark text-base tracking-tight">
-              Fasal<span className="text-farm-green">Setu</span>
-            </span>
+          <Link href="/" className="flex items-center group" title="Return to Homepage">
+            <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-9 w-auto group-hover:scale-105 transition-transform" priority />
           </Link>
         </div>
 
@@ -69,17 +67,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* User footer */}
         <div className="p-4 border-t border-farm-border-color">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded-full bg-farm-green flex items-center justify-center text-white text-xs font-bold uppercase">
+          <Link href="/profile" className="flex items-center gap-3 mb-3 group" onClick={() => setSidebarOpen(false)}>
+            <div className="w-8 h-8 rounded-full bg-farm-green flex items-center justify-center text-white text-xs font-bold uppercase flex-shrink-0">
               {profile.name ? profile.name.charAt(0) : "F"}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-farm-dark truncate">{profile.name || "Farmer Account"}</p>
+              <p className="text-sm font-semibold text-farm-dark truncate group-hover:text-farm-green transition-colors">{profile.name || "Farmer Account"}</p>
               <p className="text-xs text-farm-muted">{profile.state || "India"}</p>
             </div>
-          </div>
+          </Link>
           <Link
             href="/login"
+            onClick={logout}
             className="flex items-center gap-2 text-xs text-farm-muted hover:text-red-500 transition-colors"
           >
             <LogOut className="w-3.5 h-3.5" /> Sign out
@@ -96,9 +95,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       )}
 
       {/* ── Main area ── */}
-      <div className="flex-1 flex flex-col min-h-screen lg:ml-60">
+      {/* min-w-0: lets wide content (e.g. a table in an overflow-x-auto box)
+          scroll inside its own box instead of stretching the page on phones. */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-screen lg:ml-60">
         {/* Topbar */}
-        <header className="h-16 bg-white border-b border-farm-border-color flex items-center px-4 sm:px-6 gap-4 sticky top-0 z-20">
+        <header className="h-16 bg-white/90 backdrop-blur-sm border-b border-farm-border-color flex items-center px-4 sm:px-6 gap-4 sticky top-0 z-20">
           <button
             className="lg:hidden p-2 rounded-lg hover:bg-farm-green-light text-farm-dark transition-colors"
             onClick={() => setSidebarOpen(true)}
@@ -110,35 +111,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logo / Home redirect in topbar */}
           <Link
             href="/"
-            className="flex items-center gap-2 group hover:opacity-90 transition-opacity"
+            className="flex items-center group hover:opacity-90 transition-opacity"
             title="Return to Homepage"
           >
-            <div className="w-7 h-7 bg-farm-green rounded-lg flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-              <Sprout className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-farm-dark text-base tracking-tight">
-              Fasal<span className="text-farm-green">Setu</span>
-            </span>
+            <Image src="/logo.webp" alt="FasalSetu" width={132} height={45} className="h-8 w-auto group-hover:scale-105 transition-transform" />
           </Link>
 
           <div className="flex-1" />
-
-          {/* MOCK indicator */}
-          {process.env.NEXT_PUBLIC_USE_MOCKS === "true" && (
-            <span className="hidden sm:inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium px-2.5 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Mock data
-            </span>
-          )}
-
-          <button className="relative p-2 rounded-lg hover:bg-farm-green-light text-farm-muted hover:text-farm-green transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
-          </button>
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

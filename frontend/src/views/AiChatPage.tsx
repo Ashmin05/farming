@@ -10,9 +10,11 @@
 // ==============================================================================
 
 import { useState, useRef, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
-import { apiClient, type ChatMessage } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth/auth-client";
+import { formatPassDate } from "@/components/SourceBadge";
+import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 import {
   Brain, Send, Sprout, Mic, Paperclip,
   Loader2, RefreshCw, MessageSquare
@@ -31,13 +33,15 @@ function ChatContent() {
   const searchParams = useSearchParams();
   const prefillQ = searchParams.get("q") ?? "";
   const fieldId = searchParams.get("fieldId") ?? undefined;
+  const farmId = searchParams.get("farm") ?? undefined;
+  const { farm, isRealFarm, send } = useKrishiBot(farmId, "en");
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const [messages, setMessages] = useState<KrishiBotMessage[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI can help you with:\n• Crop health & disease diagnosis (Rice, Wheat, Onion, Tomato, Sugarcane)\n• Fertiliser and precision irrigation advice\n• Mandi market prices and best selling time\n• Weather warnings and seasonal field advisories\n\nAsk me anything in English, বাংলা (Bengali), or हिंदी (Hindi)!",
+        "Namaste! 🌾 I'm KrishiBot, your AI farming assistant.\n\nI can help you with:\n• Crop health & disease diagnosis (Rice, Wheat, Onion, Sugarcane, Potato)\n• Fertiliser and precision irrigation advice\n• Mandi market prices and best selling time\n• Weather warnings and seasonal field advisories\n\nAsk me anything in English, বাংলা (Bengali), or हिंदी (Hindi)!",
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -53,7 +57,7 @@ function ChatContent() {
     const msg = (text ?? input).trim();
     if (!msg || loading) return;
 
-    const userMsg: ChatMessage = {
+    const userMsg: KrishiBotMessage = {
       id: `u-${Date.now()}`,
       role: "user",
       content: msg,
@@ -65,10 +69,8 @@ function ChatContent() {
     setLoading(true);
 
     try {
-      const res = await apiClient.sendChatMessage(msg, messages, { field_id: fieldId });
-      if (res.ok) {
-        setMessages((prev) => [...prev, res.data]);
-      }
+      const reply = await send(msg, messages, { field_id: fieldId, farm_id: farm?.id, crop: farm?.crop });
+      setMessages((prev) => [...prev, reply]);
     } finally {
       setLoading(false);
     }
@@ -110,6 +112,9 @@ function ChatContent() {
                   Online · Powered by FasalSetu AI
                 </span>
                 {fieldId && <span className="ml-2 bg-farm-green-light text-farm-green px-2 py-0.5 rounded-full">Field context active</span>}
+                {isRealFarm && farm && (
+                  <span className="ml-2 bg-farm-green-light text-farm-green px-2 py-0.5 rounded-full">Answering for: {farm.name}</span>
+                )}
               </p>
             </div>
           </div>
@@ -154,6 +159,25 @@ function ChatContent() {
                 }`}
               >
                 {msg.content}
+                {msg.actionPoints && msg.actionPoints.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside space-y-0.5 text-sm">
+                    {msg.actionPoints.map((point, i) => <li key={i}>{point}</li>)}
+                  </ul>
+                )}
+                {msg.warnings && msg.warnings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {msg.warnings.map((warning, i) => (
+                      <p key={i} className="text-xs font-semibold text-amber-800 bg-amber-100 rounded-lg px-2 py-1">
+                        ⚠ {warning}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {msg.sources && msg.sources.length > 0 && (
+                  <p className="mt-2 pt-2 border-t border-farm-border-color/60 text-xs text-farm-muted">
+                    Based on: {msg.sources.map((s) => (s.as_of ? `${s.label} ${formatPassDate(s.as_of)}` : s.label)).join(", ")}
+                  </p>
+                )}
                 <p className={`text-xs mt-1.5 ${msg.role === "user" ? "text-white/60 text-right" : "text-farm-muted"}`}>
                   {new Date(msg.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                 </p>
@@ -233,10 +257,38 @@ function ChatContent() {
   );
 }
 
+// KrishiBot requires a signed-in account (see also KrishiBotWidget.tsx, which
+// shows a sign-in prompt for the floating widget) -- this gate covers every
+// other way to land on /ai-chat: the home page CTAs, the footer link, or
+// typing the URL directly.
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated()) {
+      setReady(true);
+    } else {
+      router.replace("/login");
+    }
+  }, [router]);
+
+  if (!ready) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64 text-farm-muted">Redirecting to sign in…</div>
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
 export default function AiChatPage() {
   return (
-    <Suspense fallback={<AppLayout><div className="flex items-center justify-center h-64 text-farm-muted">Loading…</div></AppLayout>}>
-      <ChatContent />
-    </Suspense>
+    <AuthGate>
+      <Suspense fallback={<AppLayout><div className="flex items-center justify-center h-64 text-farm-muted">Loading…</div></AppLayout>}>
+        <ChatContent />
+      </Suspense>
+    </AuthGate>
   );
 }

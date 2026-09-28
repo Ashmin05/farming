@@ -12,8 +12,13 @@
 // Defaults to exactly 2 consistent farms (Nashik Onion & Pune Wheat).
 // ==============================================================================
 
-import { useState, useEffect } from "react";
-import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
+import { useState, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { DayForecastItem, FarmDetailedWeather, FarmWeatherAlert } from "@/components/satellite/FarmWeatherReport";
+import { getUserId } from "@/lib/auth/auth-client";
+import { listFarms, createFarm, deleteFarm, type BackendFarm, type SoilReportInput } from "@/lib/api/farms-client";
+import type { SatelliteObservation } from "@/lib/api/satellite-client";
+import type { DailyWeather, FarmWeather } from "@/lib/api/weather-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -110,6 +115,293 @@ export type Farm = {
   weather: FarmDetailedWeather;
   satellite: FarmSatellite;
 };
+
+// The fields a farmer actually fills in when registering a farm — everything
+// else on `Farm` (yield/soil/water/weather/satellite) is generated demo
+// content layered on top (see enrichFarmDraft), since none of those modules
+// have real backend data yet.
+export type FarmDraft = {
+  name: string;
+  address: string;
+  district: string;
+  state: string;
+  crop: string;
+  variety: string;
+  plantingDate: string; // ISO yyyy-mm-dd
+  irrigationMethod?: string | null;
+  center: [number, number]; // [lng, lat]
+  polygonGeoJson: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
+  // Real soil report values from the registration wizard's "I have a Soil
+  // Health Card / Lab Test Report" step. When present, this is the farm's
+  // authoritative soil reading -- saved to the backend and used instead of
+  // the generated defaults below and instead of the OpenLandMap satellite
+  // estimate (see EnvironmentReportCard / GET /farms/{id}/environment).
+  soilOverride?: Partial<Pick<FarmSoil, "ph" | "nitrogen" | "phosphorus" | "potassium" | "organicMatter">>;
+};
+
+// Fills in the demo/mock domain modules (yield, soil, water, weather,
+// satellite) around a real farm's core fields. Used for every farm shown in
+// the app today, guest or signed-in, since none of those modules are backed
+// by a real service yet — only the core fields (this function's `id` and
+// `draft`) come from somewhere real (the backend, for signed-in accounts).
+export function enrichFarmDraft(id: string, draft: FarmDraft, areaAcres: number): Farm {
+  const acres = areaAcres || 2.5;
+  const estQuintals = Math.round(acres * 22);
+  const estPrice = 2400;
+
+  return {
+    id,
+    name: draft.name,
+    address: draft.address,
+    district: draft.district,
+    state: draft.state,
+    crop: draft.crop,
+    variety: draft.variety,
+    plantingDate: draft.plantingDate,
+    areaAcres: acres,
+    center: draft.center,
+    polygonGeoJson: draft.polygonGeoJson,
+    yield: {
+      estimatedQuintals: estQuintals,
+      expectedPricePerQtl: estPrice,
+      totalEstimatedValue: estQuintals * estPrice,
+      harvestWindow: "3–4 months post sowing",
+      historicalYieldComparison: "New field benchmark",
+    },
+    soil: {
+      ph: draft.soilOverride?.ph ?? 6.8,
+      nitrogen: draft.soilOverride?.nitrogen ?? "Medium",
+      phosphorus: draft.soilOverride?.phosphorus ?? "Medium",
+      potassium: draft.soilOverride?.potassium ?? "Medium",
+      organicMatter: draft.soilOverride?.organicMatter ?? "2.1%",
+      moisturePercent: 30,
+      healthRating: "Optimal",
+    },
+    water: {
+      status: "Optimal",
+      canopyMoisturePercent: 72,
+      soilMoisturePercent: 30,
+      lastIrrigationDaysAgo: 1,
+      nextRecommendedAction: "Maintain standard crop watering schedule.",
+    },
+    weather: generateFarmWeather(draft.name, draft.address, draft.crop),
+    satellite: {
+      meanNdvi: 0.68,
+      minNdvi: 0.42,
+      maxNdvi: 0.81,
+      ndwi: 0.42,
+      canopyVigourLabel: "Good",
+      healthyCanopyPercent: 80,
+      moderateCanopyPercent: 16,
+      stressedCanopyPercent: 4,
+      history: [
+        { date: "Planting", ndvi: 0.2, benchmark: 0.2, stage: "Sowing" },
+        { date: "Current", ndvi: 0.68, benchmark: 0.65, stage: "Vegetative" },
+      ],
+      stressZones: [],
+      metadata: {
+        satelliteMission: "ESA Sentinel-2B L2A",
+        acquisitionDate: "Recent Overpass",
+        cloudCoveragePercent: 0.3,
+        spatialResolution: "10m Multispectral",
+        dataQualityConfidence: 98.2,
+        sunElevationAngle: "58°",
+      },
+    },
+  };
+}
+
+// Overlays a real Sentinel-2 SatelliteObservation (backend/app/schemas/satellite.py)
+// onto a farm's synthetic FarmSatellite -- used wherever a real, signed-in
+// farm has a live analysis available (see useFarmSatelliteAnalysis.ts).
+// Only the "current stats" fields are real; `history` and `stressZones` stay
+// synthetic since the backend doesn't compute those yet (see EXPLAIN.md §5.6/§9)
+// -- callers should visibly label which parts of the panel are live vs. demo.
+export function applyLiveSatellite(base: FarmSatellite, observation: SatelliteObservation): FarmSatellite {
+  const missionLabel =
+    observation.satellite === "S2A"
+      ? "ESA Sentinel-2A L2A (Live)"
+      : observation.satellite === "S2B"
+        ? "ESA Sentinel-2B L2A (Live)"
+        : "ESA Sentinel-2 L2A (Live)";
+  const vigourLabel: FarmSatellite["canopyVigourLabel"] =
+    observation.health_score >= 80
+      ? "Excellent"
+      : observation.health_score >= 60
+        ? "Good"
+        : observation.health_score >= 40
+          ? "Fair"
+          : "Poor";
+
+  return {
+    ...base,
+    meanNdvi: observation.ndvi.mean,
+    minNdvi: observation.ndvi.min,
+    maxNdvi: observation.ndvi.max,
+    ndwi: observation.ndwi.mean,
+    canopyVigourLabel: vigourLabel,
+    healthyCanopyPercent: observation.healthy_pct,
+    moderateCanopyPercent: observation.moderate_pct,
+    stressedCanopyPercent: observation.stressed_pct,
+    metadata: {
+      satelliteMission: missionLabel,
+      acquisitionDate: observation.image_date,
+      cloudCoveragePercent: observation.cloud_pct,
+      spatialResolution: "10m Multispectral",
+      dataQualityConfidence: Math.round((100 - observation.cloud_pct) * 10) / 10,
+      sunElevationAngle: "—",
+    },
+  };
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Hand-rolled, like SourceBadge.formatPassDate -- reading the ISO date's
+// own y/m/d via Date.UTC (rather than `new Date(isoString).getDay()`, which
+// reads back in the browser's *local* timezone) never shifts a day.
+function _dayLabel(isoDate: string, index: number): string {
+  if (index === 0) return "Today";
+  const [y, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+  return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+function _shortDate(isoDate: string): string {
+  const [, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+  return `${MONTHS[m - 1]} ${String(d).padStart(2, "0")}`;
+}
+
+// No cloud-cover field is fetched from Open-Meteo (see DAILY_PARAMS in
+// backend/app/integrations/open_meteo_client.py) -- condition/icon are
+// approximated from precipitation sum/probability instead.
+function _conditionFromDay(day: DailyWeather): { condition: string; iconType: FarmDetailedWeather["iconType"] } {
+  if (day.precipitation_sum_mm > 25) return { condition: "Heavy Rain", iconType: "storm" };
+  if (day.precipitation_sum_mm > 2 || (day.precipitation_probability_pct ?? 0) >= 50) {
+    return { condition: "Rain", iconType: "rain" };
+  }
+  if ((day.precipitation_probability_pct ?? 0) >= 20) {
+    return { condition: "Partly Cloudy", iconType: "cloud-sun" };
+  }
+  return { condition: "Sunny", iconType: "sun" };
+}
+
+function _advisoryFromFlags(flags: DailyWeather["flags"]): string {
+  if (flags.heavy_rain) return "Heavy rain expected — postpone spray operations and check drainage.";
+  if (flags.heat_stress) return "High heat stress risk — irrigate early morning or evening, avoid midday work.";
+  if (flags.good_spray_window) return "Good spray window — low rain risk and calm winds.";
+  return "Normal conditions — follow standard crop schedule.";
+}
+
+// Overlays a real Open-Meteo forecast (backend/app/schemas/weather.py) onto
+// a farm's synthetic FarmDetailedWeather -- used wherever a real, signed-in
+// farm has a live forecast available (see useFarmWeather.ts). `daily[0]` is
+// treated as "today"/current conditions, since Open-Meteo has no separate
+// current-weather call wired up here. feelsLike/windDir/pressureHpa have no
+// real source (not in DAILY_PARAMS) and stay as the base/demo value.
+export function applyLiveWeather(base: FarmDetailedWeather, weather: FarmWeather): FarmDetailedWeather {
+  const days = weather.daily;
+  if (days.length === 0) return base;
+  const today = days[0];
+  const { condition, iconType } = _conditionFromDay(today);
+  const currentTemp = Math.round(today.temp_max_c);
+
+  const forecast10Days: DayForecastItem[] = days.map((day, i) => {
+    const dayCondition = _conditionFromDay(day);
+    return {
+      day: _dayLabel(day.date, i),
+      date: _shortDate(day.date),
+      condition: dayCondition.condition,
+      iconType: dayCondition.iconType,
+      hi: Math.round(day.temp_max_c),
+      lo: Math.round(day.temp_min_c),
+      rainChance: day.precipitation_probability_pct ?? 0,
+      rainfallMm: day.precipitation_sum_mm,
+      windKmh: Math.round(day.wind_speed_max_kmh),
+      humidity: day.relative_humidity_pct !== null ? Math.round(day.relative_humidity_pct) : 0,
+      uvIndex: day.uv_index_max !== null ? Math.round(day.uv_index_max) : 0,
+      farmingAdvisory: _advisoryFromFlags(day.flags),
+    };
+  });
+
+  const alerts: FarmWeatherAlert[] = [];
+  if (today.flags.heat_stress) {
+    alerts.push({
+      id: "live-heat-stress",
+      type: "Heat Stress",
+      severity: "critical",
+      timeframe: "Today",
+      headline: `High heat stress risk (${currentTemp}°C)`,
+      actionAdvice: "Irrigate early morning or evening to reduce crop heat stress; avoid midday field work.",
+    });
+  }
+  if (today.flags.heavy_rain) {
+    alerts.push({
+      id: "live-heavy-rain",
+      type: "Heavy Rain",
+      severity: "high",
+      timeframe: "Today",
+      headline: `Heavy rain expected (${today.precipitation_sum_mm.toFixed(0)}mm)`,
+      actionAdvice: "Postpone spraying and check field drainage before the rain arrives.",
+    });
+  }
+  if (today.flags.good_spray_window) {
+    alerts.push({
+      id: "live-good-spray",
+      type: "Spray Window",
+      severity: "info",
+      timeframe: "Today",
+      headline: "Good spray window today",
+      actionAdvice: "Low rain chance and calm winds — a good window for spraying.",
+    });
+  }
+
+  const rain3d = days.slice(0, 3).reduce((sum, d) => sum + d.precipitation_sum_mm, 0);
+
+  return {
+    ...base,
+    currentTemp,
+    feelsLike: currentTemp,
+    condition,
+    iconType,
+    humidity: today.relative_humidity_pct !== null ? Math.round(today.relative_humidity_pct) : base.humidity,
+    windKmh: Math.round(today.wind_speed_max_kmh),
+    rainExpected: `${rain3d.toFixed(1)}mm in next 3 days`,
+    uvIndex: today.uv_index_max !== null ? Math.round(today.uv_index_max) : base.uvIndex,
+    alerts: alerts.length > 0 ? alerts : base.alerts,
+    forecast10Days,
+  };
+}
+
+// Maps a real farm row from the backend into the same enriched Farm shape
+// used everywhere in the UI. area_ha/centroid are server-computed (see
+// backend/app/core/geometry.py) — never trust client-side area math for a
+// farm that's actually persisted.
+function backendFarmToFarm(b: BackendFarm): Farm {
+  const draft: FarmDraft = {
+    name: b.name,
+    address: b.address ?? [b.district, b.state].filter(Boolean).join(", "),
+    district: b.district ?? "",
+    state: b.state ?? "",
+    crop: b.crop,
+    variety: b.variety ?? "",
+    plantingDate: b.sowing_date,
+    irrigationMethod: b.irrigation_method,
+    center: [b.centroid_lng, b.centroid_lat],
+    polygonGeoJson: { type: "Feature", properties: {}, geometry: b.polygon_geojson },
+    soilOverride: b.soil_report
+      ? {
+          ph: b.soil_report.ph ?? undefined,
+          nitrogen: b.soil_report.nitrogen ?? undefined,
+          phosphorus: b.soil_report.phosphorus ?? undefined,
+          potassium: b.soil_report.potassium ?? undefined,
+          organicMatter:
+            b.soil_report.organic_matter_pct !== null ? `${b.soil_report.organic_matter_pct}%` : undefined,
+        }
+      : undefined,
+  };
+  const areaAcres = Math.round(b.area_ha * 2.47105 * 100) / 100;
+  return enrichFarmDraft(b.id, draft, areaAcres);
+}
 
 // ── Default 2 Canonical Farms ─────────────────────────────────────────────────
 
@@ -344,27 +636,40 @@ export const DEFAULT_FARMS: Farm[] = [
   },
 ];
 
-const STORAGE_KEY = "fasalsetu_farms_v2";
-const USER_KEY = "fasalsetu_user_v2";
+const STORAGE_KEY_BASE = "fasalsetu_farms_v2";
+const USER_KEY_BASE = "fasalsetu_user_v2";
+
+// Namespaces local data by the logged-in user's id, so switching accounts on
+// the same browser never shows one user's farms/profile to another. Signed-out
+// visitors (no account) share a "guest" namespace that carries the demo data —
+// real accounts always start from a clean, empty slate.
+function scopedKey(base: string): string {
+  return `${base}:${getUserId() ?? "guest"}`;
+}
 
 export function getStoredFarms(): Farm[] {
   if (typeof window === "undefined") return DEFAULT_FARMS;
+  const isGuest = getUserId() === null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(scopedKey(STORAGE_KEY_BASE));
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (e) {
     console.error("Error reading farms from localStorage", e);
   }
-  return DEFAULT_FARMS;
+  // First visit for this identity: guests browsing without an account get
+  // the canonical demo dataset to explore. A real, signed-in account never
+  // sees fabricated farm data — it starts empty until they register a real
+  // farm of their own.
+  return isGuest ? DEFAULT_FARMS : [];
 }
 
 export function saveFarms(farms: Farm[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(farms));
+    localStorage.setItem(scopedKey(STORAGE_KEY_BASE), JSON.stringify(farms));
     window.dispatchEvent(new Event("fasalsetu_farms_updated"));
   } catch (e) {
     console.error("Error saving farms", e);
@@ -372,33 +677,124 @@ export function saveFarms(farms: Farm[]): void {
 }
 
 export function useFarmStore() {
-  const [farms, setFarms] = useState<Farm[]>(DEFAULT_FARMS);
+  // `mounted` starts false on both the server and the client's first render
+  // (getUserId()/getStoredFarms() depend on localStorage, which doesn't
+  // exist server-side) — resolving who's signed in inside an effect, rather
+  // than during render, avoids a React hydration mismatch. Consumers should
+  // treat `farms` as not-yet-authoritative until `mounted` is true.
   const [mounted, setMounted] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [guestFarms, setGuestFarms] = useState<Farm[]>(DEFAULT_FARMS);
+  const queryClient = useQueryClient();
+
+  // Guest (signed-out) until we've actually checked — matches the "isGuest"
+  // default every other part of this store already assumes before mount.
+  const isGuest = mounted ? userId === null : true;
 
   useEffect(() => {
+    const uid = getUserId();
+    setUserId(uid);
     setMounted(true);
-    setFarms(getStoredFarms());
-
-    const handleUpdate = () => {
-      setFarms(getStoredFarms());
-    };
-
-    window.addEventListener("fasalsetu_farms_updated", handleUpdate);
-    return () => window.removeEventListener("fasalsetu_farms_updated", handleUpdate);
+    if (uid === null) {
+      setGuestFarms(getStoredFarms());
+    }
   }, []);
 
-  function addFarm(newFarm: Farm) {
-    const updated = [...farms, newFarm];
-    setFarms(updated);
-    saveFarms(updated);
-  }
+  useEffect(() => {
+    if (!mounted || userId !== null) return;
+    const handleUpdate = () => setGuestFarms(getStoredFarms());
+    window.addEventListener("fasalsetu_farms_updated", handleUpdate);
+    return () => window.removeEventListener("fasalsetu_farms_updated", handleUpdate);
+  }, [mounted, userId]);
 
-  function resetToDefault() {
-    setFarms(DEFAULT_FARMS);
+  // Signed-in accounts: farms live in the database, fetched through the real
+  // backend. Guests never hit this (query stays disabled) and keep using
+  // the local demo dataset above.
+  const farmsQuery = useQuery({
+    queryKey: ["farms", userId],
+    queryFn: async () => (await listFarms()).map(backendFarmToFarm),
+    enabled: mounted && userId !== null,
+  });
+
+  const farms = isGuest ? guestFarms : farmsQuery.data ?? [];
+  // Ready only once the load has actually settled. Not `!isLoading`: while
+  // TanStack Query waits to retry (it pauses retries in a background tab)
+  // the query is neither loading nor errored, and `farms` would read as an
+  // empty account.
+  const ready = mounted && (isGuest || farmsQuery.isSuccess || farmsQuery.isError);
+  // A failed load must never read as "this account has no farms" -- pages
+  // show an error + retry instead of the empty "Register a farm" state.
+  const loadError =
+    !isGuest && farmsQuery.isError && !farmsQuery.data
+      ? farmsQuery.error instanceof Error
+        ? farmsQuery.error.message
+        : "Couldn't load your farms."
+      : null;
+  const retryLoad = farmsQuery.refetch;
+
+  const addFarm = useCallback(
+    async (draft: FarmDraft, clientAreaAcres: number): Promise<Farm> => {
+      if (isGuest) {
+        const farm = enrichFarmDraft(`farm-${Date.now()}`, draft, clientAreaAcres);
+        const updated = [...getStoredFarms(), farm];
+        saveFarms(updated);
+        setGuestFarms(updated);
+        return farm;
+      }
+
+      const geometry = draft.polygonGeoJson?.geometry;
+      if (!geometry) throw new Error("Draw a field boundary before saving.");
+
+      const soil = draft.soilOverride;
+      const soilReport: SoilReportInput | undefined = soil
+        ? {
+            ph: soil.ph ?? null,
+            nitrogen: soil.nitrogen ?? null,
+            phosphorus: soil.phosphorus ?? null,
+            potassium: soil.potassium ?? null,
+            organic_matter_pct: soil.organicMatter ? parseFloat(soil.organicMatter) || null : null,
+          }
+        : undefined;
+
+      const backendFarm = await createFarm({
+        name: draft.name,
+        crop: draft.crop,
+        variety: draft.variety || null,
+        sowing_date: draft.plantingDate,
+        irrigation_method: draft.irrigationMethod ?? null,
+        polygon_geojson: geometry as GeoJSON.Polygon,
+        state: draft.state || null,
+        district: draft.district || null,
+        address: draft.address || null,
+        soil_report: soilReport,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["farms", userId] });
+      return backendFarmToFarm(backendFarm);
+    },
+    [isGuest, queryClient, userId]
+  );
+
+  const removeFarm = useCallback(
+    async (farmId: string): Promise<void> => {
+      if (isGuest) {
+        const updated = getStoredFarms().filter((f) => f.id !== farmId);
+        saveFarms(updated);
+        setGuestFarms(updated);
+        return;
+      }
+      await deleteFarm(farmId);
+      await queryClient.invalidateQueries({ queryKey: ["farms", userId] });
+    },
+    [isGuest, queryClient, userId]
+  );
+
+  const resetToDefault = useCallback(() => {
+    if (!isGuest) return;
+    setGuestFarms(DEFAULT_FARMS);
     saveFarms(DEFAULT_FARMS);
-  }
+  }, [isGuest]);
 
-  return { farms, addFarm, resetToDefault, mounted };
+  return { farms, addFarm, removeFarm, resetToDefault, mounted: ready, loadError, retryLoad };
 }
 
 // ── Farmer Profile Store ──────────────────────────────────────────────────────
@@ -407,31 +803,37 @@ export type FarmerProfile = {
   name: string;
   phone: string;
   state: string;
+  location: string;
   preferredLanguage: string;
 };
 
 const DEFAULT_PROFILE: FarmerProfile = {
   name: "Farmer",
-  phone: "9876543210",
+  phone: "",
   state: "Maharashtra",
+  location: "",
   preferredLanguage: "en",
 };
 
 export function getStoredProfile(): FarmerProfile {
   if (typeof window === "undefined") return DEFAULT_PROFILE;
   try {
-    const raw = localStorage.getItem(USER_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
+    const raw = localStorage.getItem(scopedKey(USER_KEY_BASE));
+    if (raw) return { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
+  } catch {
+    // localStorage unavailable (private mode, quota) — fall back silently
+  }
   return DEFAULT_PROFILE;
 }
 
 export function saveProfile(profile: FarmerProfile): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(USER_KEY, JSON.stringify(profile));
+    localStorage.setItem(scopedKey(USER_KEY_BASE), JSON.stringify(profile));
     window.dispatchEvent(new Event("fasalsetu_user_updated"));
-  } catch (e) {}
+  } catch {
+    // localStorage unavailable (private mode, quota) — fall back silently
+  }
 }
 
 export function useUserStore() {
@@ -460,16 +862,7 @@ export function generateFarmWeather(farmName: string, address: string, crop: str
     rainExpected: "5mm in next 3 days",
     uvIndex: 6,
     pressureHpa: 1011,
-    alerts: [
-      {
-        id: "alert-gen-1",
-        type: "Crop Advisory",
-        severity: "info",
-        timeframe: "This Week",
-        headline: `Favorable Weather for ${crop}`,
-        actionAdvice: `Temperatures and humidity remain within standard agronomic ranges for ${crop}. Keep regular irrigation schedule.`,
-      },
-    ],
+    alerts: [],
     forecast10Days: [
       { day: "Today", date: "Sep 22", condition: "Partly Cloudy", iconType: "cloud-sun", hi: 30, lo: 21, rainChance: 15, rainfallMm: 0.5, windKmh: 14, humidity: 66, uvIndex: 6, farmingAdvisory: `Optimal day for foliar feed or scouting ${crop} for pests.` },
       { day: "Wed", date: "Sep 23", condition: "Sunny", iconType: "sun", hi: 31, lo: 22, rainChance: 10, rainfallMm: 0, windKmh: 12, humidity: 60, uvIndex: 7, farmingAdvisory: "Mild winds and warm sunshine. Good for tractor operations." },

@@ -17,38 +17,26 @@
 import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
+import FarmsLoadError from "@/components/FarmsLoadError";
 import MapView from "@/components/map/MapView";
-import { useFarmStore, Farm, generateFarmWeather } from "@/lib/stores/farmStore";
+import { useFarmStore, Farm, FarmDraft } from "@/lib/stores/farmStore";
 import {
   MapPin, ChevronRight, Plus, Leaf, X, CheckCircle2,
-  Edit3, Calendar, Search, Navigation, AlertTriangle,
-  Satellite, IndianRupee, TrendingUp, ShieldCheck
+  Edit3, Calendar, Search, Navigation,
+  Satellite, AlertCircle, Trash2
 } from "lucide-react";
 
-const CROPS = [
-  "Rice", "Wheat", "Onion", "Tomato", "Sugarcane",
-  "Cotton", "Maize", "Soybean", "Potato", "Chilli", "Other",
-];
+const CROPS = ["Rice", "Wheat", "Onion", "Sugarcane", "Potato"];
 
 const STEPS = ["Farm Details", "Crop & Soil", "Draw on Map", "Done"];
+
+type SoilLevel = Farm["soil"]["nitrogen"];
 
 const blankForm = {
   name: "", address: "", crop: "", plantingDate: "", area: "",
   hasSoilReport: false,
   soil: { ph: "", nitrogen: "Medium", phosphorus: "Medium", potassium: "Medium", organicMatter: "" },
 };
-
-function HealthBar({ score }: { score: number }) {
-  const color = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-400" : "bg-red-500";
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 bg-farm-gray rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${score}%` }} />
-      </div>
-      <span className="text-xs font-bold text-farm-dark">{score}/100</span>
-    </div>
-  );
-}
 
 // ── Registration Modal ────────────────────────────────────────────────────────
 
@@ -57,7 +45,7 @@ function RegisterFarmModal({
   onSave,
 }: {
   onClose: () => void;
-  onSave: (farm: Farm) => void;
+  onSave: (draft: FarmDraft, areaAcres: number) => Promise<void>;
 }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(blankForm);
@@ -66,6 +54,8 @@ function RegisterFarmModal({
   const [geocodedCenter, setGeocodedCenter] = useState<[number, number] | undefined>();
   const [searchLocationQuery, setSearchLocationQuery] = useState("");
   const [searchSearching, setSearchSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
 
   const today = new Date().toISOString().split("T")[0];
@@ -139,13 +129,10 @@ function RegisterFarmModal({
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     const acres = parseFloat(form.area) || 2.5;
-    const estQuintals = Math.round(acres * 22);
-    const estPrice = 2400;
 
-    const newFarm: Farm = {
-      id: "farm-" + Date.now(),
+    const draft: FarmDraft = {
       name: form.name.trim() || "My New Farm",
       address: form.address.trim() || "Maharashtra, India",
       district: form.address.split(",")[0]?.trim() || "Rural",
@@ -153,59 +140,30 @@ function RegisterFarmModal({
       crop: form.crop || "Rice",
       variety: "High-Yield Local",
       plantingDate: form.plantingDate || today,
-      areaAcres: acres,
       center: geocodedCenter || [73.8567, 18.5204],
       polygonGeoJson: drawnPolygon,
-      yield: {
-        estimatedQuintals: estQuintals,
-        expectedPricePerQtl: estPrice,
-        totalEstimatedValue: estQuintals * estPrice,
-        harvestWindow: "3–4 months post sowing",
-        historicalYieldComparison: "New field benchmark",
-      },
-      soil: {
-        ph: parseFloat(form.soil.ph) || 6.8,
-        nitrogen: (form.soil.nitrogen as any) || "Medium",
-        phosphorus: (form.soil.phosphorus as any) || "Medium",
-        potassium: (form.soil.potassium as any) || "Medium",
-        organicMatter: form.soil.organicMatter || "2.1%",
-        moisturePercent: 30,
-        healthRating: "Optimal",
-      },
-      water: {
-        status: "Optimal",
-        canopyMoisturePercent: 72,
-        soilMoisturePercent: 30,
-        lastIrrigationDaysAgo: 1,
-        nextRecommendedAction: "Maintain standard crop watering schedule.",
-      },
-      weather: generateFarmWeather(form.name, form.address, form.crop),
-      satellite: {
-        meanNdvi: 0.68,
-        minNdvi: 0.42,
-        maxNdvi: 0.81,
-        ndwi: 0.42,
-        canopyVigourLabel: "Good",
-        healthyCanopyPercent: 80,
-        moderateCanopyPercent: 16,
-        stressedCanopyPercent: 4,
-        history: [
-          { date: "Planting", ndvi: 0.2, benchmark: 0.2, stage: "Sowing" },
-          { date: "Current", ndvi: 0.68, benchmark: 0.65, stage: "Vegetative" },
-        ],
-        stressZones: [],
-        metadata: {
-          satelliteMission: "ESA Sentinel-2B L2A",
-          acquisitionDate: "Recent Overpass",
-          cloudCoveragePercent: 0.3,
-          spatialResolution: "10m Multispectral",
-          dataQualityConfidence: 98.2,
-          sunElevationAngle: "58°",
-        },
-      },
+      soilOverride: form.hasSoilReport
+        ? {
+            ph: parseFloat(form.soil.ph) || undefined,
+            nitrogen: form.soil.nitrogen as SoilLevel,
+            phosphorus: form.soil.phosphorus as SoilLevel,
+            potassium: form.soil.potassium as SoilLevel,
+            organicMatter: form.soil.organicMatter ? `${form.soil.organicMatter}%` : undefined,
+          }
+        : undefined,
     };
 
-    onSave(newFarm);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(draft, acres);
+      return true;
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not save this farm. Please try again.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function advanceFromStep0() {
@@ -247,8 +205,9 @@ function RegisterFarmModal({
               <button
                 type="button"
                 onClick={() => searchLocation(searchLocationQuery)}
-                className="absolute right-2 top-2 text-white/60 hover:text-white"
-                title="Search location"
+                disabled={searchSearching}
+                className="absolute right-2 top-2 text-white/60 hover:text-white disabled:opacity-40 disabled:cursor-wait"
+                title={searchSearching ? "Searching…" : "Search location"}
               >
                 <Search className="w-3.5 h-3.5" />
               </button>
@@ -492,6 +451,33 @@ function RegisterFarmModal({
                         <option value="High">High</option>
                       </select>
                     </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-farm-muted block mb-0.5">
+                        Potassium (K)
+                      </label>
+                      <select
+                        value={form.soil.potassium}
+                        onChange={(e) => setSoil("potassium", e.target.value)}
+                        className="w-full px-2 py-1.5 border border-farm-border-color rounded-lg text-xs bg-white"
+                      >
+                        <option value="Low">Low</option>
+                        <option value="Medium">Medium</option>
+                        <option value="High">High</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-farm-muted block mb-0.5">
+                        Organic Matter (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder="e.g. 1.8"
+                        value={form.soil.organicMatter}
+                        onChange={(e) => setSoil("organicMatter", e.target.value)}
+                        className="w-full px-2.5 py-1.5 border border-farm-border-color rounded-lg text-xs bg-white"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -532,23 +518,32 @@ function RegisterFarmModal({
                 </div>
               </div>
 
+              {saveError && (
+                <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{saveError}</span>
+                </div>
+              )}
+
               <div className="flex justify-between pt-4">
                 <button
                   type="button"
                   onClick={() => setStep(2)}
-                  className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark"
+                  disabled={saving}
+                  className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark disabled:opacity-40"
                 >
                   ← Edit Boundary
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    handleSave();
-                    onClose();
+                  disabled={saving}
+                  onClick={async () => {
+                    const ok = await handleSave();
+                    if (ok) onClose();
                   }}
-                  className="px-6 py-2.5 bg-farm-green text-white rounded-xl text-sm font-semibold hover:bg-farm-green-dark shadow-md transition-all flex items-center gap-2"
+                  className="px-6 py-2.5 bg-farm-green text-white rounded-xl text-sm font-semibold hover:bg-farm-green-dark shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Plus className="w-4 h-4" /> Save & Activate Farm
+                  <Plus className="w-4 h-4" /> {saving ? "Saving..." : "Save & Activate Farm"}
                 </button>
               </div>
             </div>
@@ -559,20 +554,117 @@ function RegisterFarmModal({
   );
 }
 
+// ── Delete Confirmation Modal ─────────────────────────────────────────────────
+
+function ConfirmDeleteModal({
+  farm,
+  onCancel,
+  onConfirm,
+}: {
+  farm: Farm;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-hero border border-farm-border-color w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-farm-dark text-sm">Delete this farm?</h3>
+              <p className="text-xs text-farm-muted mt-1">
+                <strong>{farm.name}</strong> and all of its satellite, soil, and yield data will be
+                permanently removed. This can't be undone.
+              </p>
+            </div>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={deleting}
+              className="px-4 py-2 border border-farm-border-color rounded-xl text-xs font-semibold text-farm-muted hover:text-farm-dark disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true);
+                setError(null);
+                try {
+                  await onConfirm();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Could not delete this farm. Please try again.");
+                  setDeleting(false);
+                }
+              }}
+              className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold hover:bg-red-700 transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> {deleting ? "Deleting..." : "Delete Farm"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Farms View ───────────────────────────────────────────────────────────
 
 export default function FarmsPage() {
-  const { farms, addFarm } = useFarmStore();
+  const { farms, addFarm, removeFarm, mounted, loadError, retryLoad } = useFarmStore();
   const [showModal, setShowModal] = useState(false);
+  const [farmToDelete, setFarmToDelete] = useState<Farm | null>(null);
+
+  // Until the real (per-account) farm list has loaded client-side, `farms`
+  // is still the SSR-safe placeholder — render an empty shell rather than
+  // flash it (keep the sidebar so the layout doesn't jump).
+  if (!mounted) {
+    return <AppLayout>{null}</AppLayout>;
+  }
+
+  if (loadError) {
+    return (
+      <AppLayout>
+        <FarmsLoadError message={loadError} onRetry={() => retryLoad()} />
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
       {showModal && (
         <RegisterFarmModal
           onClose={() => setShowModal(false)}
-          onSave={(newFarm) => {
-            addFarm(newFarm);
-            setShowModal(false);
+          onSave={async (draft, areaAcres) => {
+            await addFarm(draft, areaAcres);
+          }}
+        />
+      )}
+
+      {farmToDelete && (
+        <ConfirmDeleteModal
+          farm={farmToDelete}
+          onCancel={() => setFarmToDelete(null)}
+          onConfirm={async () => {
+            await removeFarm(farmToDelete.id);
+            setFarmToDelete(null);
           }}
         />
       )}
@@ -631,33 +723,6 @@ export default function FarmsPage() {
                   </span>
                 </div>
 
-                {/* Yield & Price mini-summary */}
-                <div className="p-2.5 bg-amber-50/60 rounded-xl border border-amber-200/60 text-xs flex items-center justify-between">
-                  <span className="text-amber-900 font-medium">Est. Yield: <strong>{farm.yield.estimatedQuintals} Qtl</strong></span>
-                  <span className="text-emerald-700 font-bold">₹{farm.yield.totalEstimatedValue.toLocaleString("en-IN")}</span>
-                </div>
-
-                {/* Soil & Water mini-summary */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2 bg-farm-gray rounded-lg">
-                    <span className="text-[10px] text-farm-muted block">Soil pH</span>
-                    <strong className="text-farm-dark">{farm.soil.ph} ({farm.soil.healthRating})</strong>
-                  </div>
-                  <div className="p-2 bg-sky-50 rounded-lg border border-sky-200/50">
-                    <span className="text-[10px] text-sky-700 block">Water Status</span>
-                    <strong className="text-sky-900">{farm.water.status}</strong>
-                  </div>
-                </div>
-
-                {/* Satellite health */}
-                <div className="pt-1">
-                  <div className="flex items-center justify-between text-xs text-farm-muted mb-1">
-                    <span>Satellite Canopy Vigour</span>
-                    <span className="font-mono text-emerald-700 font-bold">NDVI {farm.satellite.meanNdvi.toFixed(2)}</span>
-                  </div>
-                  <HealthBar score={Math.round(farm.satellite.meanNdvi * 100)} />
-                </div>
-
                 {/* Action CTA */}
                 <div className="flex items-center justify-between pt-3 mt-auto border-t border-farm-border-color">
                   <Link
@@ -666,6 +731,14 @@ export default function FarmsPage() {
                   >
                     <Satellite className="w-3.5 h-3.5" /> Inspect Satellite & NDVI <ChevronRight className="w-3 h-3" />
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => setFarmToDelete(farm)}
+                    title="Delete farm"
+                    className="text-farm-muted hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             </div>
