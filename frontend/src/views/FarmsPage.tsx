@@ -38,18 +38,6 @@ const blankForm = {
   soil: { ph: "", nitrogen: "Medium", phosphorus: "Medium", potassium: "Medium", organicMatter: "" },
 };
 
-function HealthBar({ score }: { score: number }) {
-  const color = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-400" : "bg-red-500";
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 bg-farm-gray rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${score}%` }} />
-      </div>
-      <span className="text-xs font-bold text-farm-dark">{score}/100</span>
-    </div>
-  );
-}
-
 // ── Registration Modal ────────────────────────────────────────────────────────
 
 function RegisterFarmModal({
@@ -733,15 +721,6 @@ export default function FarmsPage() {
                   <span className="flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5" /> Planted {farm.plantingDate}
                   </span>
-                </div>
-
-                {/* Satellite health */}
-                <div className="pt-1">
-                  <div className="flex items-center justify-between text-xs text-farm-muted mb-1">
-                    <span>Satellite Canopy Vigour</span>
-                    <span className="font-mono text-emerald-700 font-bold">NDVI {farm.satellite.meanNdvi.toFixed(2)}</span>
-                  </div>
-                  <HealthBar score={Math.round(farm.satellite.meanNdvi * 100)} />
                 </div>
 
                 {/* Action CTA */}

@@ -9,10 +9,13 @@ from app.repositories.environment_snapshot_repository import EnvironmentSnapshot
 from app.repositories.farm_alert_repository import FarmAlertRepository
 from app.repositories.farm_repository import FarmRepository
 from app.repositories.index_timeseries_repository import IndexTimeseriesRepository
+from app.repositories.irrigation_log_repository import IrrigationLogRepository
+from app.repositories.irrigation_plan_repository import IrrigationPlanRepository
 from app.repositories.satellite_layer_repository import SatelliteLayerRepository
 from app.repositories.satellite_repository import SatelliteRepository
 from app.repositories.stress_zone_repository import StressZoneRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.weather_cache_repository import WeatherCacheRepository
 from app.services.auth_service import AuthService
 from app.services.farm_service import FarmService
 
@@ -84,4 +87,19 @@ def stress_zone_repository(session: AsyncSession) -> StressZoneRepository:
 @pytest.fixture
 def environment_snapshot_repository(session: AsyncSession) -> EnvironmentSnapshotRepository:
     return EnvironmentSnapshotRepository(session)
+
+
+@pytest.fixture
+def weather_cache_repository(session: AsyncSession) -> WeatherCacheRepository:
+    return WeatherCacheRepository(session)
+
+
+@pytest.fixture
+def irrigation_plan_repository(session: AsyncSession) -> IrrigationPlanRepository:
+    return IrrigationPlanRepository(session)
+
+
+@pytest.fixture
+def irrigation_log_repository(session: AsyncSession) -> IrrigationLogRepository:
+    return IrrigationLogRepository(session)
 

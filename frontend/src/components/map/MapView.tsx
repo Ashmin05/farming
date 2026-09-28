@@ -118,31 +118,37 @@ function MapViewInner({
     // Add navigation control (zoom and rotation)
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    // Initialize Mapbox GeolocateControl for live user GPS tracking
-    const geolocate = new mapboxgl.GeolocateControl({
-      positionOptions: {
-        enableHighAccuracy: true,
-      },
-      trackUserLocation: false,
-      showUserHeading: false,
-    });
+    // Live GPS "find me" control -- only during farm registration (drawing a
+    // new field boundary), where it helps the user locate themselves on the
+    // map. Read-only/analysis views always show the farm's registered
+    // location instead, never the device's current position.
+    let geolocate: mapboxgl.GeolocateControl | null = null;
+    if (showDrawControls) {
+      geolocate = new mapboxgl.GeolocateControl({
+        positionOptions: {
+          enableHighAccuracy: true,
+        },
+        trackUserLocation: false,
+        showUserHeading: false,
+      });
 
-    geolocateRef.current = geolocate;
-    map.addControl(geolocate, "top-right");
+      geolocateRef.current = geolocate;
+      map.addControl(geolocate, "top-right");
 
-    geolocate.on("error", (error: { code?: number; message?: string }) => {
-      if (error && error.code === 1) {
-        setLocationError("Location permission denied. Please allow location access in your browser to view your live GPS position.");
-      } else if (error && error.code === 2) {
-        setLocationError("GPS location is unavailable on this device.");
-      } else if (error && error.message) {
-        setLocationError(error.message);
-      }
-    });
+      geolocate.on("error", (error: { code?: number; message?: string }) => {
+        if (error && error.code === 1) {
+          setLocationError("Location permission denied. Please allow location access in your browser to view your live GPS position.");
+        } else if (error && error.code === 2) {
+          setLocationError("GPS location is unavailable on this device.");
+        } else if (error && error.message) {
+          setLocationError(error.message);
+        }
+      });
 
-    geolocate.on("geolocate", () => {
-      setLocationError(null);
-    });
+      geolocate.on("geolocate", () => {
+        setLocationError(null);
+      });
+    }
 
     // Initialize MapboxDraw — hide native control buttons since we use our own overlay buttons
     const draw = new MapboxDraw({
@@ -239,7 +245,7 @@ function MapViewInner({
         } catch {
           // fallback if bbox calculation fails
         }
-      } else if (!flyToCenterRef.current) {
+      } else if (geolocate && !flyToCenterRef.current) {
         // Only auto-locate when the caller gave no polygon or target location —
         // otherwise GPS would pull the map away from the farm/village being shown
         if (typeof window !== "undefined" && "geolocation" in navigator) {
