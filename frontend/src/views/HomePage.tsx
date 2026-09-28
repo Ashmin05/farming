@@ -57,7 +57,7 @@ export default function HomePage() {
       label: t.viewOnGround,
       desc: t.viewOnGroundDesc,
       image: "/images/field_farmer.jpg",
-      tag: "SoilGrids / Farmer",
+      tag: "Soil",
     },
     {
       label: t.viewWhenRains,

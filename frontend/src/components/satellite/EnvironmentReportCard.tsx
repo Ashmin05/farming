@@ -1,18 +1,17 @@
 "use client";
 
 import { CloudRain, Thermometer, Droplets, Layers, Loader2, RefreshCw, MoonStar } from "lucide-react";
-import SourceBadge from "@/components/SourceBadge";
 import type { EnvironmentReport } from "@/lib/api/satellite-client";
 
 function Section({
   icon: Icon,
   title,
-  badge,
+  note,
   children,
 }: {
   icon: typeof CloudRain;
   title: string;
-  badge: React.ReactNode;
+  note?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -22,7 +21,7 @@ function Section({
           <Icon className="w-3.5 h-3.5 text-farm-green" />
           {title}
         </h4>
-        {badge}
+        {note && <span className="text-[10px] text-farm-muted">{note}</span>}
       </div>
       {children}
     </div>
@@ -42,8 +41,8 @@ const mm = (v: number | null) => (v === null ? "—" : `${v.toFixed(0)} mm`);
 
 /**
  * Rainfall (CHIRPS), land-surface temperature (MODIS), soil moisture (SMAP,
- * regional) and static soil properties (OpenLandMap) for a real farm, each
- * with its own source/date/resolution badge.
+ * regional) and static soil properties (OpenLandMap, or the farmer's own
+ * Soil Health Card) for a real farm.
  */
 export default function EnvironmentReportCard({
   report,
@@ -93,15 +92,6 @@ export default function EnvironmentReportCard({
           <Section
             icon={CloudRain}
             title="Rainfall"
-            badge={
-              <SourceBadge
-                live={{
-                  source: "CHIRPS",
-                  asOf: report.rainfall.provenance.as_of,
-                  resolution: report.rainfall.provenance.resolution,
-                }}
-              />
-            }
           >
             <div className="grid grid-cols-4 gap-2">
               <Stat label="7 days" value={mm(report.rainfall.mm_7d)} />
@@ -114,15 +104,6 @@ export default function EnvironmentReportCard({
           <Section
             icon={Thermometer}
             title="Land-surface heat"
-            badge={
-              <SourceBadge
-                live={{
-                  source: "MODIS",
-                  asOf: report.temperature.provenance.as_of,
-                  resolution: report.temperature.provenance.resolution,
-                }}
-              />
-            }
           >
             <div className="grid grid-cols-2 gap-2">
               <Stat
@@ -136,15 +117,6 @@ export default function EnvironmentReportCard({
           <Section
             icon={Droplets}
             title="Soil moisture"
-            badge={
-              <SourceBadge
-                live={{
-                  source: "SMAP",
-                  asOf: report.soil_moisture.provenance.as_of,
-                  resolution: report.soil_moisture.provenance.resolution,
-                }}
-              />
-            }
           >
             <Stat
               label="Surface soil moisture"
@@ -159,27 +131,7 @@ export default function EnvironmentReportCard({
           <Section
             icon={Layers}
             title="Soil (0–10 cm)"
-            badge={
-              report.soil.is_lab_report ? (
-                <SourceBadge
-                  live={{
-                    label: "Lab report",
-                    source: "Soil Health Card",
-                    asOf: report.soil.provenance.as_of,
-                    resolution: report.soil.provenance.resolution,
-                  }}
-                />
-              ) : (
-                <SourceBadge
-                  live={{
-                    label: "Soil map",
-                    source: "OpenLandMap",
-                    asOf: null,
-                    resolution: report.soil.provenance.resolution,
-                  }}
-                />
-              )
-            }
+            note={report.soil.is_lab_report ? "From your Soil Health Card" : "Estimated from satellite soil maps"}
           >
             <div className="grid grid-cols-3 gap-2">
               <Stat label="pH (H₂O)" value={report.soil.ph === null ? "—" : report.soil.ph.toFixed(1)} />

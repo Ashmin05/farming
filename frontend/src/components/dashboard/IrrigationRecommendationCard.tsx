@@ -27,7 +27,7 @@ import type { SatelliteObservation, EnvironmentReport } from "@/lib/api/satellit
 import type { SatelliteStatus } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import type { FarmWeather } from "@/lib/api/weather-client";
 import type { IrrigationPlan } from "@/lib/api/irrigation-client";
-import SourceBadge, { LiveSource, formatPassDate } from "@/components/SourceBadge";
+import SourceBadge, { formatPassDate } from "@/components/SourceBadge";
 import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
 
 type Props = {
@@ -135,9 +135,6 @@ export default function IrrigationRecommendationCard({
   irrigationPlan, irrigationLoading, irrigationError, retryIrrigation,
   currentSatellite, currentWeather,
 }: Props) {
-  const sentinelSource: LiveSource | null = satelliteObservation
-    ? { source: "Sentinel-2", asOf: satelliteObservation.image_date, cloudPct: satelliteObservation.cloud_pct }
-    : null;
 
   const header = (
     <div className="flex items-center gap-2 mb-4">
@@ -223,14 +220,12 @@ export default function IrrigationRecommendationCard({
                   label="NDVI"
                   value={satelliteObservation.ndvi.mean.toFixed(2)}
                   sub="Crop health"
-                  badge={sentinelSource && <SourceBadge live={sentinelSource} />}
                 />
                 <StatChip
                   icon={<Waves className="w-3.5 h-3.5" />}
                   label="NDWI"
                   value={satelliteObservation.ndwi.mean.toFixed(2)}
                   sub="Canopy moisture"
-                  badge={sentinelSource && <SourceBadge live={sentinelSource} />}
                 />
                 <StatChip
                   icon={<Droplets className="w-3.5 h-3.5" />}
@@ -248,18 +243,7 @@ export default function IrrigationRecommendationCard({
                         Couldn&apos;t load · Retry
                       </button>
                     ) : (
-                      "Root zone"
-                    )
-                  }
-                  badge={
-                    environment?.soil_moisture.surface_moisture != null && (
-                      <SourceBadge
-                        live={{
-                          source: "SMAP",
-                          asOf: environment.soil_moisture.provenance.as_of,
-                          resolution: environment.soil_moisture.provenance.resolution,
-                        }}
-                      />
+                      "Surface, regional"
                     )
                   }
                 />
@@ -282,7 +266,6 @@ export default function IrrigationRecommendationCard({
                       "Next 3 days"
                     )
                   }
-                  badge={liveWeather && <SourceBadge live={{ source: "Open-Meteo", asOf: liveWeather.provenance.fetched_at }} />}
                 />
                 <StatChip
                   icon={<Thermometer className="w-3.5 h-3.5" />}
@@ -295,7 +278,6 @@ export default function IrrigationRecommendationCard({
                         : "—"
                   }
                   sub={weatherError ? "Couldn't load" : "Avg high, next 3d"}
-                  badge={liveWeather && <SourceBadge live={{ source: "Open-Meteo", asOf: liveWeather.provenance.fetched_at }} />}
                 />
                 <StatChip
                   icon={<ShieldAlert className="w-3.5 h-3.5" />}
@@ -304,11 +286,10 @@ export default function IrrigationRecommendationCard({
                   sub={
                     stress && (
                       <span className={`inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${stress.bg} ${stress.color}`}>
-                        {stress.label} probability
+                        {stress.label} · soil water used
                       </span>
                     )
                   }
-                  badge={<SourceBadge live={{ label: "Modelled", source: "FAO-56", asOf: irrigationPlan.computed_through }} />}
                 />
               </div>
             </div>
@@ -396,7 +377,7 @@ export default function IrrigationRecommendationCard({
             value={`${demoStressPct}%`}
             sub={
               <span className={`inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${demoStress.bg} ${demoStress.color}`}>
-                {demoStress.label} probability
+                {demoStress.label} · soil water used
               </span>
             }
             badge={<SourceBadge demo />}

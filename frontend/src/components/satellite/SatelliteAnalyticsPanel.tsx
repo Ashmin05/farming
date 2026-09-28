@@ -10,11 +10,11 @@
 // - Field Stress-Zone diagnostic report
 // Layer selection, the map, and sensor/quality info live in SatellitePage.tsx
 // (they sit around the map, not below it) — this panel is everything below.
-// Data-agnostic: the page passes live data + SourceBadges for real farms and
-// demo data + "Demo data" badges for guests.
+// Data-agnostic: the page passes live data for real farms and demo data for
+// guests (the map's corner badge says which).
 // ==============================================================================
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { FarmSatellite } from "@/lib/stores/farmStore";
 import SeasonCurveChart, { SeasonCurvePoint } from "@/components/charts/SeasonCurveChart";
 import {
@@ -132,18 +132,14 @@ export interface PanelStressZone {
 export default function SatelliteAnalyticsPanel({
   areaAcres,
   satellite,
-  statsBadge,
   seasonCurve,
   stressZones,
 }: {
   areaAcres: number;
   /** Current stats (NDVI/NDWI/canopy %) — live or demo, as the page decides. */
   satellite: FarmSatellite;
-  /** SourceBadge for the current stats. */
-  statsBadge: ReactNode;
   seasonCurve: {
     points: SeasonCurvePoint[];
-    badge: ReactNode;
     /** Shown instead of the chart when there are no points yet. */
     emptyMessage?: string;
     selectedKey?: string;
@@ -154,7 +150,6 @@ export default function SatelliteAnalyticsPanel({
   };
   stressZones: {
     items: PanelStressZone[];
-    badge: ReactNode;
     isLoading?: boolean;
     /** Set when the zones failed to load -- never shown as "no zones detected". */
     error?: string | null;
@@ -183,10 +178,9 @@ export default function SatelliteAnalyticsPanel({
               Current NDVI & Canopy Statistics
             </h3>
             <p className="text-xs text-farm-muted">Quantitative remote sensing metrics calculated across {areaAcres} acres</p>
-            <div className="mt-1.5">{statsBadge}</div>
           </div>
           <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
-            Vigour: {satellite.canopyVigourLabel}
+            Health vs. crop stage: {satellite.canopyVigourLabel}
           </span>
         </div>
 
@@ -197,7 +191,6 @@ export default function SatelliteAnalyticsPanel({
             </div>
             <p className="text-xs text-farm-muted">Mean NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.meanNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-emerald-600 font-semibold">{satellite.canopyVigourLabel}</span>
           </div>
 
           <div className="p-3.5 bg-farm-gray rounded-xl text-center">
@@ -206,7 +199,6 @@ export default function SatelliteAnalyticsPanel({
             </div>
             <p className="text-xs text-farm-muted">Min NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.minNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-amber-600 font-semibold">Low</span>
           </div>
 
           <div className="p-3.5 bg-farm-gray rounded-xl text-center">
@@ -215,7 +207,6 @@ export default function SatelliteAnalyticsPanel({
             </div>
             <p className="text-xs text-farm-muted">Max NDVI</p>
             <p className="text-xl font-bold text-farm-dark">{satellite.maxNdvi.toFixed(2)}</p>
-            <span className="text-[10px] text-emerald-700 font-semibold">High</span>
           </div>
 
           <div className="p-3.5 bg-sky-50 rounded-xl text-center border border-sky-200/60">
@@ -240,7 +231,6 @@ export default function SatelliteAnalyticsPanel({
               </h3>
               <p className="text-[11px] text-farm-muted">One dot per clear satellite pass</p>
             </div>
-            {seasonCurve.badge}
           </div>
 
           {seasonCurve.error ? (
@@ -287,7 +277,6 @@ export default function SatelliteAnalyticsPanel({
               <Leaf className="w-4 h-4 text-farm-green" />
               Canopy Health Distribution
             </h3>
-            {statsBadge}
           </div>
           <div className="flex-1 flex items-center justify-center py-2">
             <CanopyDonut satellite={satellite} />
@@ -304,7 +293,6 @@ export default function SatelliteAnalyticsPanel({
               Detected Field Stress Zones
             </h3>
             <p className="text-xs text-farm-muted">Automated satellite anomaly classification per field segment</p>
-            <div className="mt-1.5">{stressZones.badge}</div>
           </div>
           {!stressZones.isLoading && !stressZones.error && (
           <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">

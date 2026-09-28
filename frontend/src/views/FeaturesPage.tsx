@@ -5,18 +5,20 @@ import Link from "next/link";
 // ==============================================================================
 // Route URL: /features
 // App Router Entry: src/app/features/page.tsx
-// Description: Comprehensive overview of all 14 farming tools (farm management,
-// satellite crop health, weather forecasting, soil & irrigation, yield & price trends).
+// Description: Overview of the farming tools the app actually offers (farm
+// management, satellite crop health, weather, irrigation, mandi prices, AI).
 // ==============================================================================
 
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import {
-  Map, Satellite, BarChart2, Bell, Cloud, CloudLightning,
-  Droplets, Droplet, TrendingUp, DollarSign, Brain, Globe,
+  Map, Satellite, BarChart2, Bell, Cloud,
+  Droplet, DollarSign, Brain,
   ClipboardList, ArrowRight, ChevronRight
 } from "lucide-react";
 
+// Every card and bullet here describes something the app actually does
+// today -- don't add planned features.
 const featureGroups = [
   {
     group: "🌾 Farm & Field",
@@ -25,25 +27,25 @@ const featureGroups = [
       {
         id: "farm-management",
         title: "Farm Management",
-        desc: "Track multiple farms, fields, and crops in one place. Add notes, photos, and activity logs per season.",
+        desc: "Register all your farms in one account, each with its crop and sowing date.",
         icon: ClipboardList,
         detail: [
-          "Multi-farm & multi-field support",
-          "Crop calendar & season tracking",
-          "Activity log with photo evidence",
-          "Input cost tracking per acre",
+          "Multiple farms per account",
+          "Crop and sowing date per farm",
+          "Optional Soil Health Card / lab report entry",
+          "Crop-stage tracking from the sowing date",
         ],
       },
       {
         id: "field-mapping",
         title: "Field Mapping",
-        desc: "Draw your field boundary on a map. Calculate area in acres and hectares.",
+        desc: "Draw your field boundary on a map. Area is calculated in acres and hectares.",
         icon: Map,
         detail: [
-          "Draw field boundary using Mapbox map",
+          "Draw the field boundary on a Mapbox map",
           "Area calculation in acres & hectares",
-          "Support for multiple fields per farm",
-          "Pinpoint your field location",
+          "Village / place search",
+          "Use your current GPS location",
         ],
       },
     ],
@@ -55,49 +57,37 @@ const featureGroups = [
       {
         id: "satellite-crop-health",
         title: "Satellite Crop Health",
-        desc: "View your field from satellite imagery. See healthy vs. stressed crop areas.",
+        desc: "Sentinel-2 imagery of your own field boundary, showing healthy vs. stressed areas.",
         icon: Satellite,
         detail: [
-          "Satellite imagery updated regularly",
-          "True-colour and false-colour views",
-          "Stress zone overlay",
-          "Visual crop health overview",
-        ],
-      },
-      {
-        id: "crop-health-map",
-        title: "Crop Health Map",
-        desc: "Full-field visual map that pinpoints the exact zones needing attention today.",
-        icon: Map,
-        detail: [
-          "Field-level resolution maps",
-          "Compare with historical images",
-          "Export map as PDF / image",
-          "Share with agronomist",
+          "True-colour, NDVI, NDWI and EVI map layers",
+          "Stress-zone outlines you can click for details",
+          "Slider to view earlier satellite passes",
+          "Health score against your crop's growth stage",
         ],
       },
       {
         id: "ndvi-history",
-        title: "NDVI History",
-        desc: "Track your crop's greenness index over the entire season and across past years.",
+        title: "NDVI Season Curve",
+        desc: "Track your crop's greenness index across the season, one point per clear satellite pass.",
         icon: BarChart2,
         detail: [
-          "NDVI graph over full season",
-          "Year-over-year comparison",
-          "Alert when NDVI drops suddenly",
-          "Benchmark against district average",
+          "NDVI graph over the current season",
+          "Compared with the expected curve for your crop's stage",
+          "Cloudy passes skipped automatically",
+          "Updated nightly",
         ],
       },
       {
         id: "crop-stress-alert",
-        title: "Crop Stress Alert",
-        desc: "Get notified when satellite detects stress in your crop.",
+        title: "Crop Stress Alerts",
+        desc: "In-app alerts when a new satellite pass shows your crop under stress.",
         icon: Bell,
         detail: [
-          "In-app alerts",
-          "Stress type identification (water, pest, disease)",
-          "Severity levels: low / medium / critical",
-          "Next-action recommendation",
+          "Sudden NDVI drop",
+          "NDVI below the benchmark for the crop stage",
+          "Water stress",
+          "Warning and critical severity levels",
         ],
       },
     ],
@@ -109,120 +99,74 @@ const featureGroups = [
       {
         id: "weather-forecast",
         title: "Weather Forecast",
-        desc: "10-day hyper-local forecast for your exact field location, not just the nearest city.",
+        desc: "10-day forecast for your field's exact location, from Open-Meteo.",
         icon: Cloud,
         detail: [
-          "Hourly & daily forecasts",
+          "Daily high / low temperature",
           "Rainfall probability & amount",
-          "Wind speed & direction",
-          "Optimal spray / harvest windows",
-        ],
-      },
-      {
-        id: "weather-alerts",
-        title: "Weather Alerts",
-        desc: "Hailstorm, heavy rain, frost, and heat wave alerts up to 48 hours in advance.",
-        icon: CloudLightning,
-        detail: [
-          "IMD-linked data source",
-          "Extreme event push notifications",
-          "Frost risk for sensitive crops",
-          "Post-event crop damage estimator",
+          "Wind, humidity and UV index",
+          "Heavy-rain, heat-stress and good-spray-window flags",
         ],
       },
     ],
   },
   {
-    group: "💧 Soil & Irrigation",
+    group: "💧 Irrigation",
     color: "amber",
     features: [
       {
-        id: "soil-info",
-        title: "Soil Information",
-        desc: "Detailed soil composition, pH, organic matter, and nutrient levels mapped for your field.",
-        icon: Droplets,
-        detail: [
-          "pH, N-P-K, organic carbon levels",
-          "Soil texture & water retention",
-          "Fertiliser recommendation per acre",
-          "Soil health improvement tips",
-        ],
-      },
-      {
         id: "irrigation-recommendation",
         title: "Irrigation Recommendation",
-        desc: "Know when and how much to irrigate, based on your crop stage and soil condition.",
+        desc: "Know when and how much to irrigate, from a daily soil-water balance for your field.",
         icon: Droplet,
         detail: [
-          "Crop-stage aware scheduling",
-          "Supports drip & sprinkler systems",
-          "Based on soil and weather data",
-          "Water usage tracking",
+          "FAO-56 crop water model",
+          "Crop-stage aware water needs",
+          "Uses your soil type and the weather forecast",
+          "3-day irrigate / hold plan with depth in mm",
         ],
       },
     ],
   },
   {
-    group: "📈 Yield & Market",
+    group: "📈 Market",
     color: "orange",
     features: [
       {
-        id: "yield-estimate",
-        title: "Yield Estimate",
-        desc: "Estimate your harvest in advance to plan labour, storage, and transport.",
-        icon: TrendingUp,
-        detail: [
-          "Yield estimate before harvest",
-          "Input vs. output profitability view",
-          "Storage & transport planning",
-          "Compare with nearby farms",
-        ],
-      },
-      {
         id: "price-trends",
-        title: "Price Trends",
-        desc: "Track mandi prices and understand market trends for your crop.",
+        title: "Mandi Prices",
+        desc: "Track mandi prices for your crop and see short-term price estimates.",
         icon: DollarSign,
         detail: [
-          "Mandi price data (AGMARK)",
-          "Price trends over time",
-          "Best-time-to-sell guidance",
-          "Nearest mandi comparison",
+          "Mandi price data from Agmarknet",
+          "Price history over time",
+          "7 / 14 / 30-day price estimates",
+          "Sell-now or hold suggestion",
         ],
       },
     ],
   },
   {
-    group: "🤖 AI & Language",
+    group: "🤖 AI Assistant",
     color: "purple",
     features: [
       {
         id: "ai-farming-assistant",
         title: "AI Farming Assistant",
-        desc: "KrishiBot answers every farming question in simple words — pests, diseases, fertilisers, schemes.",
+        desc: "KrishiBot answers questions about your farm using its own satellite, weather, irrigation and mandi data.",
         icon: Brain,
         detail: [
           "Natural language Q&A",
-          "Pest & disease image diagnosis",
-          "Government scheme eligibility check",
-          "Fast intelligent Q&A",
-        ],
-      },
-      {
-        id: "multilingual",
-        title: "Multilingual Support",
-        desc: "Complete application available in 3 languages: Bengali (বাংলা), Hindi (हिंदी), and English.",
-        icon: Globe,
-        detail: [
-          "Full app in Bengali, Hindi, and English",
-          "Voice input & audio alerts",
-          "1-tap language switcher across all screens",
-          "KrishiBot responds fluently in your language",
+          "Answers based on your farm's real data",
+          "Shows which data each answer used",
+          "Suggested next steps and warnings",
         ],
       },
     ],
   },
 ];
+
+const featureCount = featureGroups.reduce((n, g) => n + g.features.length, 0);
 
 export default function FeaturesPage() {
   return (
@@ -234,10 +178,10 @@ export default function FeaturesPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-farm-green text-sm font-semibold uppercase tracking-wider mb-2">Complete Agri-Tech Suite</p>
           <h1 className="text-4xl sm:text-5xl font-bold text-farm-dark mb-4">
-            14 tools for smarter farming.
+            {featureCount} tools for smarter farming.
           </h1>
           <p className="text-farm-muted text-lg max-w-2xl mx-auto">
-            From satellite imagery to AI agronomy — all features built for Indian farmers.
+            From satellite imagery to an AI farm advisor — built for Indian farmers.
           </p>
         </div>
       </div>
@@ -285,7 +229,7 @@ export default function FeaturesPage() {
       <div className="bg-farm-sand py-16 border-t border-farm-border-color">
         <div className="max-w-2xl mx-auto px-4 text-center">
           <h2 className="text-3xl font-bold text-farm-dark mb-3">Ready to get started?</h2>
-          <p className="text-farm-muted mb-8">Access all 14 farming tools directly from your dashboard.</p>
+          <p className="text-farm-muted mb-8">Access all {featureCount} farming tools directly from your dashboard.</p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
               href="/register"

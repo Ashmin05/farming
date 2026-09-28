@@ -14,7 +14,7 @@
 // - Signed-in users' real farms: live data via TanStack Query hooks
 //   (/satellite/latest, /timeseries, /layers, /environment), with loading /
 //   empty / error states. Guests keep demo data, labelled as such.
-// - Every satellite number carries a SourceBadge ("Live — Sentinel-2, 20 Sep, cloud 0.3%")
+// - The map's top-right corner carries the SourceBadge ("Live — Sentinel-2, 20 Sep, cloud 0.3%")
 // ==============================================================================
 
 import { useState, useEffect, useMemo, Suspense } from "react";
@@ -164,12 +164,9 @@ function SatelliteContent() {
 
   const activeLayerMeta = LAYERS.find((l) => l.key === activeLayer)!;
 
-  // Provenance of whatever pass the map is showing, and of the latest analysis.
+  // Provenance of whatever pass the map is showing (the map's corner badge).
   const mapSource: LiveSource | null = mapPass
     ? { source: "Sentinel-2", asOf: mapPass.date, cloudPct: mapPass.cloudPct }
-    : null;
-  const latestSource: LiveSource | null = observation
-    ? { source: "Sentinel-2", asOf: observation.image_date, cloudPct: observation.cloud_pct }
     : null;
 
   // Mean shown in the caption follows the pass on the map when it's a
@@ -211,7 +208,6 @@ function SatelliteContent() {
         benchmark: p.benchmark,
         stage: p.stage,
       }));
-  const latestSeasonPoint = timeseries.points[timeseries.points.length - 1];
 
   const stressZoneItems: PanelStressZone[] = isRealFarm
     ? (layers?.stress_zones ?? []).map((zone, idx) => ({
@@ -413,11 +409,6 @@ function SatelliteContent() {
             {activeLayerMeta.label} Index
             {activeLayerMean !== null && ` (Mean: ${activeLayerMean.toFixed(2)})`}
           </strong>{" "}
-          {activeLayerMean !== null && (
-            <span className="inline-block align-middle mr-1">
-              {isRealFarm ? mapSource && <SourceBadge live={mapSource} /> : <SourceBadge demo />}
-            </span>
-          )}
           {LAYER_CAPTIONS[activeLayer]}
         </p>
       </div>
@@ -428,11 +419,10 @@ function SatelliteContent() {
       ) : (
         <>
           {/* ── Live Sentinel-2 status banner (real farms only) ── */}
-          {isRealFarm && observation && latestSource && (
+          {isRealFarm && observation && (
             <div className="rounded-2xl border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-emerald-50 border-emerald-200">
               <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-900">
                 <strong>Latest analysis</strong>
-                <SourceBadge live={latestSource} />
                 <span>
                   Health score <strong>{observation.health_score.toFixed(0)}/100</strong>
                 </span>
@@ -456,20 +446,8 @@ function SatelliteContent() {
           <SatelliteAnalyticsPanel
             areaAcres={selectedFarm.areaAcres}
             satellite={displaySatellite}
-            statsBadge={latestSource ? <SourceBadge live={latestSource} /> : <SourceBadge demo />}
             seasonCurve={{
               points: seasonPoints,
-              badge: !isRealFarm ? (
-                <SourceBadge demo />
-              ) : latestSeasonPoint ? (
-                <SourceBadge
-                  live={{
-                    source: "Sentinel-2",
-                    asOf: latestSeasonPoint.image_date,
-                    cloudPct: latestSeasonPoint.cloud_pct,
-                  }}
-                />
-              ) : null,
               emptyMessage: timeseries.isLoading
                 ? "Loading season curve…"
                 : "Your season curve builds up as the nightly job records each clear pass — the first points appear after tonight's run.",
@@ -482,7 +460,6 @@ function SatelliteContent() {
             }}
             stressZones={{
               items: stressZoneItems,
-              badge: isRealFarm ? mapSource && <SourceBadge live={mapSource} /> : <SourceBadge demo />,
               isLoading: isRealFarm && layersLoading,
               error: layersError,
               onRetry: () => retryLayers(),

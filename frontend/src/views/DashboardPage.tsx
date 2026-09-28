@@ -13,8 +13,8 @@
 //    /irrigation); guests get an illustrative demo version.
 // 3. Real farms: satellite alerts strip with mark-as-read (/alerts).
 //    Guests: the demo weather/advisory banner.
-// 4. Smart Suggestion + Harvest Estimation side by side.
-// 5. Mandi Price Pulse (real prices for the farm's crop) & sample agri news, then Quick Tools.
+// 4. Mandi Price Pulse (real prices for the farm's crop).
+// 5. 7-day weather forecast for the farm's location.
 // ==============================================================================
 
 import { useState } from "react";
@@ -32,8 +32,7 @@ import FarmsLoadError from "@/components/FarmsLoadError";
 import FarmWeatherReport from "@/components/satellite/FarmWeatherReport";
 import {
   TrendingUp, AlertTriangle, CheckCircle2,
-  ChevronRight, ChevronDown, Sparkles, Newspaper,
-  Sprout, CloudSun, Loader2
+  ChevronRight, ChevronDown, Sprout, CloudSun, Loader2
 } from "lucide-react";
 
 function useGreeting(): string {
@@ -94,7 +93,7 @@ export default function DashboardPage() {
           </div>
           <h2 className="text-xl font-bold text-farm-dark">No farms yet</h2>
           <p className="text-farm-muted text-sm">
-            Register your first farm to see live satellite health, weather, and yield insights here.
+            Register your first farm to see live satellite health, weather, irrigation and mandi prices here.
           </p>
           <Link
             href="/farms"
@@ -207,106 +206,17 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ── Smart Suggestion + Harvest Estimation, side by side ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Smart Suggestion */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-farm-muted flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-farm-green" />
-              Smart Suggestion
-            </h2>
-            <div>
-              <h3 className="font-bold text-farm-dark text-sm">
-                Crop Stage: {currentSatellite!.history[currentSatellite!.history.length - 1]?.stage ?? "Vegetative"} ({currentFarm.crop})
-              </h3>
-              <p className="text-xs text-farm-muted leading-relaxed mt-1">
-                {currentFarm.water.nextRecommendedAction} Foliar nutrient absorption is currently optimal under{" "}
-                {currentWeather?.currentTemp ?? currentFarm.weather.currentTemp}°C temperature conditions.
-              </p>
-            </div>
-            <Link
-              href={`/ai-chat?q=${encodeURIComponent(
-                `Give me a detailed crop-stage advisory for my ${currentFarm.crop} field`
-              )}`}
-              className="inline-flex items-center gap-1.5 text-xs font-bold text-farm-green hover:text-farm-green-dark"
-            >
-              View Detailed Advisory <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          </div>
-
-          {/* Harvest Estimation */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-5 shadow-xs space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-farm-muted flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-farm-green" />
-                Harvest Estimation
-              </h2>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-farm-green-light text-farm-green flex-shrink-0">
-                {currentFarm.yield.harvestWindow}
-              </span>
-            </div>
-            <div>
-              <p className="text-xs text-farm-muted">Expected Value</p>
-              <p className="text-2xl font-extrabold text-farm-dark">
-                ₹{currentFarm.yield.totalEstimatedValue.toLocaleString("en-IN")}
-              </p>
-            </div>
-            <div className="flex items-center justify-between pt-2 border-t border-farm-border-color text-xs">
-              <div>
-                <p className="text-farm-muted">Estimated Yield</p>
-                <p className="font-bold text-farm-dark">{currentFarm.yield.estimatedQuintals} Quintals</p>
-              </div>
-              <div className="text-right">
-                <p className="text-farm-muted">Target Mandi Rate</p>
-                <p className="font-bold text-farm-dark">₹{currentFarm.yield.expectedPricePerQtl.toLocaleString("en-IN")}/Qtl</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Mandi Price Pulse & Agri News ── */}
+        {/* ── Mandi Price Pulse ── */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold uppercase tracking-wider text-farm-dark flex items-center gap-2">
-              <Newspaper className="w-4 h-4 text-farm-green" />
-              Mandi Price Pulse & Agri News
+              <TrendingUp className="w-4 h-4 text-farm-green" />
+              Mandi Price Pulse
             </h2>
-            <span className="text-xs text-farm-muted">Prices from Agmarknet · news items are samples</span>
+            <span className="text-xs text-farm-muted">Prices from Agmarknet</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <MarketPriceCard farmId={currentFarm?.id} />
-
-            <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
-              <span className="text-[10px] uppercase font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded">
-                Wheat Procurement
-              </span>
-              <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                Sample
-              </span>
-              <h3 className="font-bold text-xs text-farm-dark mt-2">
-                Central Wheat MSP set at ₹2,275/Qtl for 2026 rabi season
-              </h3>
-              <p className="text-[11px] text-farm-muted mt-1 leading-relaxed">
-                Govt procurement centres set to open in October. Register land records on state portal.
-              </p>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-farm-border-color p-4 shadow-xs hover:shadow-card transition-all">
-              <span className="text-[10px] uppercase font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
-                Soil Scheme
-              </span>
-              <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                Sample
-              </span>
-              <h3 className="font-bold text-xs text-farm-dark mt-2">
-                Free Soil Health Card testing drive active in Maharashtra talukas
-              </h3>
-              <p className="text-[11px] text-farm-muted mt-1 leading-relaxed">
-                Village agriculture assistants collecting soil samples for micronutrient and organic carbon tests.
-              </p>
-            </div>
-          </div>
+          <MarketPriceCard farmId={currentFarm?.id} />
         </div>
 
         {/* ── 7-Day Weather Forecast & Details (farmwise location) ── */}

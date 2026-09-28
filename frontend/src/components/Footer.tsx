@@ -5,25 +5,18 @@ const footerLinks = {
   Product: [
     { label: "Features", href: "/features" },
     { label: "Satellite Monitoring", href: "/satellite" },
-    { label: "Weather Alerts", href: "/weather" },
+    { label: "Weather", href: "/weather" },
+    { label: "Mandi Prices", href: "/market" },
     { label: "AI Assistant (KrishiBot)", href: "/ai-chat" },
+  ],
+  Account: [
     { label: "Farmer Login", href: "/login" },
     { label: "Dashboard", href: "/dashboard" },
-  ],
-  Company: [
-    { label: "About Us", href: "/about" },
-    { label: "Blog", href: "/blog" },
-    { label: "Careers", href: "/careers" },
-  ],
-  Support: [
     { label: "Help Center", href: "/help" },
-    { label: "Contact Us", href: "/contact" },
-    { label: "Privacy Policy", href: "/privacy" },
-    { label: "Terms of Service", href: "/terms" },
   ],
 };
 
-const crops = ["Rice", "Wheat", "Onion", "Tomato", "Sugarcane"];
+const crops = ["Rice", "Wheat", "Onion", "Potato", "Sugarcane"];
 
 export default function Footer() {
   return (
@@ -40,7 +33,7 @@ export default function Footer() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-12">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
           {/* Brand */}
           <div className="md:col-span-2">
             <Link href="/" className="inline-flex mb-4 bg-white rounded-lg px-3 py-1.5">
@@ -48,24 +41,8 @@ export default function Footer() {
             </Link>
             <p className="text-white/60 text-sm leading-relaxed max-w-xs">
               Empowering Indian farmers with satellite intelligence, AI-driven advice,
-              and real-time crop insights — in your own language.
+              and weather and market insights for their own fields.
             </p>
-            <div className="flex gap-3 mt-6">
-              {[
-                { label: "𝕏", href: "#" },
-                { label: "f", href: "#" },
-                { label: "▶", href: "#" },
-                { label: "📷", href: "#" },
-              ].map(({ label, href }) => (
-                <a
-                  key={label}
-                  href={href}
-                  className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center hover:bg-farm-green transition-colors text-white/80 text-sm font-bold"
-                >
-                  {label}
-                </a>
-              ))}
-            </div>
           </div>
 
           {/* Links */}
