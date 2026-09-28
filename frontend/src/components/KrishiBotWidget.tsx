@@ -12,10 +12,11 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Brain, Send, X, Sprout, Loader2, Maximize2, MessageSquare, LogIn } from "lucide-react";
-import { apiClient, type ChatMessage } from "@/lib/api";
 import { isAuthenticated } from "@/lib/auth/auth-client";
+import { formatPassDate } from "@/components/SourceBadge";
+import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 
-const WELCOME: ChatMessage = {
+const WELCOME: KrishiBotMessage = {
   id: "welcome",
   role: "assistant",
   content: "Namaste! 🌾 I'm KrishiBot AI. Ask me about crop health, irrigation, pests, or market prices.",
@@ -26,10 +27,11 @@ export default function KrishiBotWidget() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [authed, setAuthed] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
+  const [messages, setMessages] = useState<KrishiBotMessage[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { send } = useKrishiBot(undefined, "en");
 
   useEffect(() => {
     setAuthed(isAuthenticated());
@@ -43,23 +45,23 @@ export default function KrishiBotWidget() {
     return null;
   }
 
-  async function send(text?: string) {
+  async function handleSend(text?: string) {
     const msg = (text ?? input).trim();
     if (!msg || loading) return;
-    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: "user", content: msg, timestamp: new Date().toISOString() };
+    const userMsg: KrishiBotMessage = { id: `u-${Date.now()}`, role: "user", content: msg, timestamp: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
     try {
-      const res = await apiClient.sendChatMessage(msg, messages);
-      if (res.ok) setMessages((prev) => [...prev, res.data]);
+      const reply = await send(msg, messages);
+      setMessages((prev) => [...prev, reply]);
     } finally {
       setLoading(false);
     }
   }
 
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") { e.preventDefault(); send(); }
+    if (e.key === "Enter") { e.preventDefault(); handleSend(); }
   }
 
   return (
@@ -159,6 +161,11 @@ export default function KrishiBotWidget() {
                     : "bg-white text-farm-dark rounded-tl-sm shadow-sm border border-farm-border-color"
                   }`}>
                   {msg.content}
+                  {msg.sources && msg.sources.length > 0 && (
+                    <p className="mt-1.5 pt-1.5 border-t border-farm-border-color text-[10px] text-farm-muted">
+                      Based on: {msg.sources.map((s) => (s.as_of ? `${s.label} ${formatPassDate(s.as_of)}` : s.label)).join(", ")}
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -186,7 +193,7 @@ export default function KrishiBotWidget() {
                 {["Yellow leaves on wheat?", "Rice water schedule?", "Onion pest control?"].map((q) => (
                   <button
                     key={q}
-                    onClick={() => send(q)}
+                    onClick={() => handleSend(q)}
                     className="text-xs bg-farm-green-light border border-farm-border-color px-2 py-1 rounded-full text-farm-dark hover:border-farm-green hover:text-farm-green transition-all"
                   >
                     {q}
@@ -207,7 +214,7 @@ export default function KrishiBotWidget() {
                 className="flex-1 text-xs text-farm-dark placeholder-farm-muted bg-transparent focus:outline-none"
               />
               <button
-                onClick={() => send()}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || loading}
                 className="w-7 h-7 bg-farm-green rounded-lg flex items-center justify-center text-white hover:bg-farm-green-dark transition-all disabled:opacity-40"
               >

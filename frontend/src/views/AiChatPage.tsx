@@ -12,8 +12,9 @@
 import { useState, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
-import { apiClient, type ChatMessage } from "@/lib/api";
 import { isAuthenticated } from "@/lib/auth/auth-client";
+import { formatPassDate } from "@/components/SourceBadge";
+import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 import {
   Brain, Send, Sprout, Mic, Paperclip,
   Loader2, RefreshCw, MessageSquare
@@ -32,8 +33,10 @@ function ChatContent() {
   const searchParams = useSearchParams();
   const prefillQ = searchParams.get("q") ?? "";
   const fieldId = searchParams.get("fieldId") ?? undefined;
+  const farmId = searchParams.get("farm") ?? undefined;
+  const { farm, isRealFarm, send } = useKrishiBot(farmId, "en");
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const [messages, setMessages] = useState<KrishiBotMessage[]>([
     {
       id: "welcome",
       role: "assistant",
@@ -54,7 +57,7 @@ function ChatContent() {
     const msg = (text ?? input).trim();
     if (!msg || loading) return;
 
-    const userMsg: ChatMessage = {
+    const userMsg: KrishiBotMessage = {
       id: `u-${Date.now()}`,
       role: "user",
       content: msg,
@@ -66,10 +69,8 @@ function ChatContent() {
     setLoading(true);
 
     try {
-      const res = await apiClient.sendChatMessage(msg, messages, { field_id: fieldId });
-      if (res.ok) {
-        setMessages((prev) => [...prev, res.data]);
-      }
+      const reply = await send(msg, messages, { field_id: fieldId, farm_id: farm?.id, crop: farm?.crop });
+      setMessages((prev) => [...prev, reply]);
     } finally {
       setLoading(false);
     }
@@ -111,6 +112,9 @@ function ChatContent() {
                   Online · Powered by FasalSetu AI
                 </span>
                 {fieldId && <span className="ml-2 bg-farm-green-light text-farm-green px-2 py-0.5 rounded-full">Field context active</span>}
+                {isRealFarm && farm && (
+                  <span className="ml-2 bg-farm-green-light text-farm-green px-2 py-0.5 rounded-full">Answering for: {farm.name}</span>
+                )}
               </p>
             </div>
           </div>
@@ -155,6 +159,25 @@ function ChatContent() {
                 }`}
               >
                 {msg.content}
+                {msg.actionPoints && msg.actionPoints.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside space-y-0.5 text-sm">
+                    {msg.actionPoints.map((point, i) => <li key={i}>{point}</li>)}
+                  </ul>
+                )}
+                {msg.warnings && msg.warnings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {msg.warnings.map((warning, i) => (
+                      <p key={i} className="text-xs font-semibold text-amber-800 bg-amber-100 rounded-lg px-2 py-1">
+                        ⚠ {warning}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {msg.sources && msg.sources.length > 0 && (
+                  <p className="mt-2 pt-2 border-t border-farm-border-color/60 text-xs text-farm-muted">
+                    Based on: {msg.sources.map((s) => (s.as_of ? `${s.label} ${formatPassDate(s.as_of)}` : s.label)).join(", ")}
+                  </p>
+                )}
                 <p className={`text-xs mt-1.5 ${msg.role === "user" ? "text-white/60 text-right" : "text-farm-muted"}`}>
                   {new Date(msg.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                 </p>

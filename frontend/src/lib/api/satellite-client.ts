@@ -203,7 +203,8 @@ export interface EnvironmentReport {
   generated_at: string;
 }
 
-/** Cache-only read; `null` until the nightly job has produced a report. */
+/** Cache-only read; `null` until the nightly job (or refreshEnvironmentReport)
+ * has produced a report. */
 export async function getEnvironmentReport(farmId: string): Promise<EnvironmentReport | null> {
   try {
     return await apiFetch<EnvironmentReport>(`/farms/${farmId}/environment`);
@@ -211,6 +212,13 @@ export async function getEnvironmentReport(farmId: string): Promise<EnvironmentR
     if (err instanceof SatelliteApiError && err.status === 404) return null;
     throw err;
   }
+}
+
+/** Runs a live rainfall/temperature/soil-moisture refresh right now instead
+ * of waiting for the nightly job -- see getLatestSatelliteAnalysis's
+ * refreshSatelliteAnalysis for the same pattern. */
+export function refreshEnvironmentReport(farmId: string): Promise<EnvironmentReport> {
+  return apiFetch<EnvironmentReport>(`/farms/${farmId}/environment/refresh`, { method: "POST" });
 }
 
 export interface FarmAlert {

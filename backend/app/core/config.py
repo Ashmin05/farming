@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     SATELLITE_API_KEY: str | None = None
     AI_API_KEY: str | None = None
 
+    # Gemini (Google GenAI) API keys for the AI Advisor / KrishiBot
+    # (app/integrations/gemini_client.py, app/services/advisor_service.py).
+    # Comma-separated so a quota/auth error on one key falls through to the
+    # next rather than failing the request. Blank means "no Gemini key
+    # configured" -- AdvisorService then answers with its scripted (non-LLM)
+    # fallback instead of erroring.
+    GEMINI_API_KEYS: str = ""
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+    # Per-user cap on POST /farms/{id}/ask. In-memory (see
+    # AdvisorService's _RateLimiter) -- single process, resets on restart.
+    ADVISOR_RATE_LIMIT_PER_HOUR: int = 20
+
     # Google Earth Engine (app/integrations/earth_engine_client.py).
     # GEE_PROJECT_ID is always required. GEE_SERVICE_ACCOUNT_EMAIL/
     # GEE_KEY_PATH are optional — set both for production (a service-account
@@ -117,6 +129,10 @@ class Settings(BaseSettings):
     @property
     def market_perishable_commodities(self) -> list[str]:
         return _csv(self.MARKET_PERISHABLE_COMMODITIES)
+
+    @property
+    def gemini_api_keys(self) -> list[str]:
+        return _csv(self.GEMINI_API_KEYS)
 
 
 def _csv(value: str) -> list[str]:
