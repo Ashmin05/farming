@@ -14,10 +14,11 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FarmDetailedWeather } from "@/components/satellite/FarmWeatherReport";
+import { DayForecastItem, FarmDetailedWeather, FarmWeatherAlert } from "@/components/satellite/FarmWeatherReport";
 import { getUserId } from "@/lib/auth/auth-client";
 import { listFarms, createFarm, deleteFarm, type BackendFarm, type SoilReportInput } from "@/lib/api/farms-client";
 import type { SatelliteObservation } from "@/lib/api/satellite-client";
+import type { DailyWeather, FarmWeather } from "@/lib/api/weather-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -250,6 +251,124 @@ export function applyLiveSatellite(base: FarmSatellite, observation: SatelliteOb
       dataQualityConfidence: Math.round((100 - observation.cloud_pct) * 10) / 10,
       sunElevationAngle: "—",
     },
+  };
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Hand-rolled, like SourceBadge.formatPassDate -- reading the ISO date's
+// own y/m/d via Date.UTC (rather than `new Date(isoString).getDay()`, which
+// reads back in the browser's *local* timezone) never shifts a day.
+function _dayLabel(isoDate: string, index: number): string {
+  if (index === 0) return "Today";
+  const [y, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+  return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+function _shortDate(isoDate: string): string {
+  const [, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+  return `${MONTHS[m - 1]} ${String(d).padStart(2, "0")}`;
+}
+
+// No cloud-cover field is fetched from Open-Meteo (see DAILY_PARAMS in
+// backend/app/integrations/open_meteo_client.py) -- condition/icon are
+// approximated from precipitation sum/probability instead.
+function _conditionFromDay(day: DailyWeather): { condition: string; iconType: FarmDetailedWeather["iconType"] } {
+  if (day.precipitation_sum_mm > 25) return { condition: "Heavy Rain", iconType: "storm" };
+  if (day.precipitation_sum_mm > 2 || (day.precipitation_probability_pct ?? 0) >= 50) {
+    return { condition: "Rain", iconType: "rain" };
+  }
+  if ((day.precipitation_probability_pct ?? 0) >= 20) {
+    return { condition: "Partly Cloudy", iconType: "cloud-sun" };
+  }
+  return { condition: "Sunny", iconType: "sun" };
+}
+
+function _advisoryFromFlags(flags: DailyWeather["flags"]): string {
+  if (flags.heavy_rain) return "Heavy rain expected — postpone spray operations and check drainage.";
+  if (flags.heat_stress) return "High heat stress risk — irrigate early morning or evening, avoid midday work.";
+  if (flags.good_spray_window) return "Good spray window — low rain risk and calm winds.";
+  return "Normal conditions — follow standard crop schedule.";
+}
+
+// Overlays a real Open-Meteo forecast (backend/app/schemas/weather.py) onto
+// a farm's synthetic FarmDetailedWeather -- used wherever a real, signed-in
+// farm has a live forecast available (see useFarmWeather.ts). `daily[0]` is
+// treated as "today"/current conditions, since Open-Meteo has no separate
+// current-weather call wired up here. feelsLike/windDir/pressureHpa have no
+// real source (not in DAILY_PARAMS) and stay as the base/demo value.
+export function applyLiveWeather(base: FarmDetailedWeather, weather: FarmWeather): FarmDetailedWeather {
+  const days = weather.daily;
+  if (days.length === 0) return base;
+  const today = days[0];
+  const { condition, iconType } = _conditionFromDay(today);
+  const currentTemp = Math.round(today.temp_max_c);
+
+  const forecast10Days: DayForecastItem[] = days.map((day, i) => {
+    const dayCondition = _conditionFromDay(day);
+    return {
+      day: _dayLabel(day.date, i),
+      date: _shortDate(day.date),
+      condition: dayCondition.condition,
+      iconType: dayCondition.iconType,
+      hi: Math.round(day.temp_max_c),
+      lo: Math.round(day.temp_min_c),
+      rainChance: day.precipitation_probability_pct ?? 0,
+      rainfallMm: day.precipitation_sum_mm,
+      windKmh: Math.round(day.wind_speed_max_kmh),
+      humidity: day.relative_humidity_pct !== null ? Math.round(day.relative_humidity_pct) : 0,
+      uvIndex: day.uv_index_max !== null ? Math.round(day.uv_index_max) : 0,
+      farmingAdvisory: _advisoryFromFlags(day.flags),
+    };
+  });
+
+  const alerts: FarmWeatherAlert[] = [];
+  if (today.flags.heat_stress) {
+    alerts.push({
+      id: "live-heat-stress",
+      type: "Heat Stress",
+      severity: "critical",
+      timeframe: "Today",
+      headline: `High heat stress risk (${currentTemp}°C)`,
+      actionAdvice: "Irrigate early morning or evening to reduce crop heat stress; avoid midday field work.",
+    });
+  }
+  if (today.flags.heavy_rain) {
+    alerts.push({
+      id: "live-heavy-rain",
+      type: "Heavy Rain",
+      severity: "high",
+      timeframe: "Today",
+      headline: `Heavy rain expected (${today.precipitation_sum_mm.toFixed(0)}mm)`,
+      actionAdvice: "Postpone spraying and check field drainage before the rain arrives.",
+    });
+  }
+  if (today.flags.good_spray_window) {
+    alerts.push({
+      id: "live-good-spray",
+      type: "Spray Window",
+      severity: "info",
+      timeframe: "Today",
+      headline: "Good spray window today",
+      actionAdvice: "Low rain chance and calm winds — a good window for spraying.",
+    });
+  }
+
+  const rain3d = days.slice(0, 3).reduce((sum, d) => sum + d.precipitation_sum_mm, 0);
+
+  return {
+    ...base,
+    currentTemp,
+    feelsLike: currentTemp,
+    condition,
+    iconType,
+    humidity: today.relative_humidity_pct !== null ? Math.round(today.relative_humidity_pct) : base.humidity,
+    windKmh: Math.round(today.wind_speed_max_kmh),
+    rainExpected: `${rain3d.toFixed(1)}mm in next 3 days`,
+    uvIndex: today.uv_index_max !== null ? Math.round(today.uv_index_max) : base.uvIndex,
+    alerts: alerts.length > 0 ? alerts : base.alerts,
+    forecast10Days,
   };
 }
 
@@ -743,16 +862,7 @@ export function generateFarmWeather(farmName: string, address: string, crop: str
     rainExpected: "5mm in next 3 days",
     uvIndex: 6,
     pressureHpa: 1011,
-    alerts: [
-      {
-        id: "alert-gen-1",
-        type: "Crop Advisory",
-        severity: "info",
-        timeframe: "This Week",
-        headline: `Favorable Weather for ${crop}`,
-        actionAdvice: `Temperatures and humidity remain within standard agronomic ranges for ${crop}. Keep regular irrigation schedule.`,
-      },
-    ],
+    alerts: [],
     forecast10Days: [
       { day: "Today", date: "Sep 22", condition: "Partly Cloudy", iconType: "cloud-sun", hi: 30, lo: 21, rainChance: 15, rainfallMm: 0.5, windKmh: 14, humidity: 66, uvIndex: 6, farmingAdvisory: `Optimal day for foliar feed or scouting ${crop} for pests.` },
       { day: "Wed", date: "Sep 23", condition: "Sunny", iconType: "sun", hi: 31, lo: 22, rainChance: 10, rainfallMm: 0, windKmh: 12, humidity: 60, uvIndex: 7, farmingAdvisory: "Mild winds and warm sunshine. Good for tractor operations." },

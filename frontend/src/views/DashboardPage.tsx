@@ -19,19 +19,21 @@
 import { useState } from "react";
 import Link from "next/link";
 import AppLayout from "@/components/AppLayout";
-import { useFarmStore, useUserStore, applyLiveSatellite } from "@/lib/stores/farmStore";
+import { useFarmStore, useUserStore, applyLiveSatellite, applyLiveWeather } from "@/lib/stores/farmStore";
 import { useFarmSatelliteAnalysis } from "@/lib/hooks/useFarmSatelliteAnalysis";
 import { useFarmEnvironment } from "@/lib/hooks/useFarmEnvironment";
+import { useFarmWeather } from "@/lib/hooks/useFarmWeather";
 import SourceBadge, { LiveSource } from "@/components/SourceBadge";
 import SatelliteStatusState from "@/components/satellite/SatelliteStatusState";
 import AlertsStrip from "@/components/dashboard/AlertsStrip";
 import MarketPriceCard from "@/components/dashboard/MarketPriceCard";
 import FarmsLoadError from "@/components/FarmsLoadError";
+import FarmWeatherReport from "@/components/satellite/FarmWeatherReport";
 import {
-  Satellite, Droplets, TrendingUp, AlertTriangle,
+  Droplets, TrendingUp, AlertTriangle,
   ShieldCheck, Thermometer, CheckCircle2,
-  ChevronRight, ChevronDown, Sparkles, Brain, Newspaper,
-  Calculator, Sprout, Leaf, CloudSun, Loader2, MoonStar
+  ChevronRight, ChevronDown, Sparkles, Newspaper,
+  Sprout, Leaf, CloudSun, Loader2, MoonStar
 } from "lucide-react";
 
 function useGreeting(): string {
@@ -47,11 +49,6 @@ export default function DashboardPage() {
   const [selectedFarmId, setSelectedFarmId] = useState<string>(farms[0]?.id || "farm-1");
   const greeting = useGreeting();
 
-  // Calculator modal state
-  const [calcOpen, setCalcOpen] = useState(false);
-  const [calcAcreage, setCalcAcreage] = useState<number>(3);
-  const [calcCrop, setCalcCrop] = useState<string>("Onion");
-
   const currentFarm = farms.find((f) => f.id === selectedFarmId) || farms[0];
   const {
     isRealFarm,
@@ -62,9 +59,14 @@ export default function DashboardPage() {
   } = useFarmSatelliteAnalysis(currentFarm?.id);
   const { report: environment, isLoading: environmentLoading, isError: environmentError, retry: retryEnvironment } =
     useFarmEnvironment(currentFarm?.id);
+  const { weather: liveWeather, isLoading: weatherLoading, isError: weatherError, retry: retryWeather } =
+    useFarmWeather(currentFarm?.id);
   const currentSatellite = currentFarm && satelliteObservation
     ? applyLiveSatellite(currentFarm.satellite, satelliteObservation)
     : currentFarm?.satellite;
+  const currentWeather = currentFarm && liveWeather
+    ? applyLiveWeather(currentFarm.weather, liveWeather)
+    : currentFarm?.weather;
   const sentinelSource: LiveSource | null = satelliteObservation
     ? { source: "Sentinel-2", asOf: satelliteObservation.image_date, cloudPct: satelliteObservation.cloud_pct }
     : null;
@@ -145,23 +147,21 @@ export default function DashboardPage() {
         {/* ── 4 Stat Cards ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Crop Health (NDVI) */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-farm-muted">Crop Health (NDVI)</span>
-              <span className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Leaf className="w-4 h-4" />
-              </span>
-            </div>
+          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group flex flex-col items-center text-center">
+            <span className="text-emerald-600 mb-2 group-hover:scale-105 transition-transform">
+              <Leaf className="w-7 h-7" />
+            </span>
+            <span className="text-xs font-medium text-farm-muted mb-2">Crop Health (NDVI)</span>
             {isRealFarm && !satelliteObservation ? (
-              <SatelliteStatusState compact status={satelliteStatus} error={satelliteError} onRetry={retrySatellite} />
+              <div className="flex-1 flex flex-col items-center justify-center w-full">
+                <SatelliteStatusState compact status={satelliteStatus} error={satelliteError} onRetry={retrySatellite} />
+              </div>
             ) : (
               <>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-extrabold text-farm-dark">{currentSatellite!.meanNdvi.toFixed(2)}</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                    {currentSatellite!.canopyVigourLabel}
-                  </span>
-                </div>
+                <span className="text-2xl font-extrabold text-farm-dark">{currentSatellite!.meanNdvi.toFixed(2)}</span>
+                <span className="mt-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                  {currentSatellite!.canopyVigourLabel}
+                </span>
                 <p className="text-xs text-farm-muted mt-2">
                   {satelliteObservation && (
                     <>
@@ -179,37 +179,37 @@ export default function DashboardPage() {
           </div>
 
           {/* Soil Condition */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-farm-muted">Soil Condition</span>
-              <span className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <ShieldCheck className="w-4 h-4" />
-              </span>
-            </div>
+          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group flex flex-col items-center text-center">
+            <span className="text-amber-600 mb-2 group-hover:scale-105 transition-transform">
+              <ShieldCheck className="w-7 h-7" />
+            </span>
+            <span className="text-xs font-medium text-farm-muted mb-2">Soil Condition</span>
             {isRealFarm ? (
               environmentLoading ? (
-                <p className="text-xs text-farm-muted flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Loading soil report…
-                </p>
+                <div className="flex-1 flex flex-col items-center justify-center w-full">
+                  <p className="text-xs text-farm-muted flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Loading soil report…
+                  </p>
+                </div>
               ) : environmentError ? (
-                <p className="text-xs text-red-700">
-                  Couldn&apos;t load the soil report.{" "}
-                  <button onClick={() => retryEnvironment()} className="font-semibold underline">
-                    Retry
-                  </button>
-                </p>
+                <div className="flex-1 flex flex-col items-center justify-center w-full">
+                  <p className="text-xs text-red-700">
+                    Couldn&apos;t load the soil report.{" "}
+                    <button onClick={() => retryEnvironment()} className="font-semibold underline">
+                      Retry
+                    </button>
+                  </p>
+                </div>
               ) : environment ? (
                 <>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-extrabold text-farm-dark">
-                      pH {environment.soil.ph !== null ? environment.soil.ph.toFixed(1) : "—"}
+                  <span className="text-2xl font-extrabold text-farm-dark">
+                    pH {environment.soil.ph !== null ? environment.soil.ph.toFixed(1) : "—"}
+                  </span>
+                  {environment.soil.texture_class && (
+                    <span className="mt-1 text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                      {environment.soil.texture_class}
                     </span>
-                    {environment.soil.texture_class && (
-                      <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
-                        {environment.soil.texture_class}
-                      </span>
-                    )}
-                  </div>
+                  )}
                   <p className="text-xs text-farm-muted mt-2">
                     Organic carbon:{" "}
                     {environment.soil.organic_carbon_g_per_kg !== null
@@ -223,19 +223,19 @@ export default function DashboardPage() {
                   </div>
                 </>
               ) : (
-                <p className="text-xs text-farm-muted flex items-start gap-2">
-                  <MoonStar className="w-4 h-4 flex-shrink-0" />
-                  Soil report is generated by the nightly refresh — check back tomorrow.
-                </p>
+                <div className="flex-1 flex flex-col items-center justify-center w-full">
+                  <p className="text-xs text-farm-muted flex flex-col items-center gap-2">
+                    <MoonStar className="w-4 h-4 flex-shrink-0" />
+                    Soil report is generated by the nightly refresh — check back tomorrow.
+                  </p>
+                </div>
               )
             ) : (
               <>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-extrabold text-farm-dark">pH {currentFarm.soil.ph}</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                    {currentFarm.soil.healthRating}
-                  </span>
-                </div>
+                <span className="text-2xl font-extrabold text-farm-dark">pH {currentFarm.soil.ph}</span>
+                <span className="mt-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                  {currentFarm.soil.healthRating}
+                </span>
                 <p className="text-xs text-farm-muted mt-2">
                   N: {currentFarm.soil.nitrogen} · P: {currentFarm.soil.phosphorus} · K: {currentFarm.soil.potassium}
                 </p>
@@ -247,33 +247,29 @@ export default function DashboardPage() {
           </div>
 
           {/* Canopy Moisture */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-farm-muted">Canopy Moisture</span>
-              <span className="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Droplets className="w-4 h-4" />
-              </span>
-            </div>
+          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group flex flex-col items-center text-center">
+            <span className="text-sky-600 mb-2 group-hover:scale-105 transition-transform">
+              <Droplets className="w-7 h-7" />
+            </span>
+            <span className="text-xs font-medium text-farm-muted mb-2">Canopy Moisture</span>
             {isRealFarm ? (
               satelliteObservation && sentinelSource ? (
                 <>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-extrabold text-farm-dark">
-                      NDWI {satelliteObservation.ndwi.mean.toFixed(2)}
-                    </span>
-                    <span
-                      className={`text-xs font-bold px-2 py-0.5 rounded-md ${
-                        satelliteObservation.ndwi.mean >= 0 ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
-                      }`}
-                    >
-                      {satelliteObservation.ndwi.mean >= 0 ? "Adequate" : "Dry"}
-                    </span>
-                  </div>
+                  <span className="text-2xl font-extrabold text-farm-dark">
+                    NDWI {satelliteObservation.ndwi.mean.toFixed(2)}
+                  </span>
+                  <span
+                    className={`mt-1 text-xs font-bold px-2 py-0.5 rounded-md ${
+                      satelliteObservation.ndwi.mean >= 0 ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
+                    }`}
+                  >
+                    {satelliteObservation.ndwi.mean >= 0 ? "Adequate" : "Dry"}
+                  </span>
                   <div className="mt-2">
                     <SourceBadge live={sentinelSource} />
                   </div>
                   {environment && environment.soil_moisture.surface_moisture !== null && (
-                    <div className="mt-2 space-y-1">
+                    <div className="mt-2 space-y-1 flex flex-col items-center">
                       <p className="text-xs text-farm-muted">
                         Soil moisture {environment.soil_moisture.surface_moisture.toFixed(2)} m³/m³
                       </p>
@@ -288,20 +284,20 @@ export default function DashboardPage() {
                   )}
                 </>
               ) : (
-                <p className="text-xs text-farm-muted">Available once the first satellite analysis finishes.</p>
+                <div className="flex-1 flex flex-col items-center justify-center w-full">
+                  <p className="text-xs text-farm-muted">Available once the first satellite analysis finishes.</p>
+                </div>
               )
             ) : (
               <>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-extrabold text-farm-dark">{currentFarm.water.soilMoisturePercent}%</span>
-                  <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded-md ${
-                      currentFarm.water.status === "Optimal" ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
-                    }`}
-                  >
-                    {currentFarm.water.status}
-                  </span>
-                </div>
+                <span className="text-2xl font-extrabold text-farm-dark">{currentFarm.water.soilMoisturePercent}%</span>
+                <span
+                  className={`mt-1 text-xs font-bold px-2 py-0.5 rounded-md ${
+                    currentFarm.water.status === "Optimal" ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
+                  }`}
+                >
+                  {currentFarm.water.status}
+                </span>
                 <p className="text-xs text-farm-muted mt-2 truncate" title={currentFarm.water.nextRecommendedAction}>
                   Last watered: {currentFarm.water.lastIrrigationDaysAgo}d ago
                 </p>
@@ -313,21 +309,54 @@ export default function DashboardPage() {
           </div>
 
           {/* Field Weather */}
-          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-farm-muted">Field Weather</span>
-              <span className="w-8 h-8 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Thermometer className="w-4 h-4" />
-              </span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold text-farm-dark">{currentFarm.weather.currentTemp}°C</span>
-              <span className="text-xs text-farm-muted font-medium">{currentFarm.weather.condition}</span>
-            </div>
-            <p className="text-xs text-farm-muted mt-2 flex items-center gap-2">
-              <span>💧 {currentFarm.weather.humidity}%</span>
-              <span>💨 {currentFarm.weather.windKmh} km/h</span>
-            </p>
+          <div className="bg-white rounded-2xl border border-farm-border-color p-4.5 shadow-xs hover:border-farm-green transition-all group flex flex-col items-center text-center">
+            <span className="text-orange-600 mb-2 group-hover:scale-105 transition-transform">
+              <Thermometer className="w-7 h-7" />
+            </span>
+            <span className="text-xs font-medium text-farm-muted mb-2">Field Weather</span>
+            {isRealFarm && weatherLoading ? (
+              <div className="flex-1 flex flex-col items-center justify-center w-full">
+                <p className="text-xs text-farm-muted flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading forecast…
+                </p>
+              </div>
+            ) : isRealFarm && weatherError ? (
+              <div className="flex-1 flex flex-col items-center justify-center w-full">
+                <p className="text-xs text-red-700">
+                  Couldn&apos;t load the forecast.{" "}
+                  <button onClick={() => retryWeather()} className="font-semibold underline">
+                    Retry
+                  </button>
+                </p>
+              </div>
+            ) : (
+              currentWeather && (
+                <>
+                  <span className="text-2xl font-extrabold text-farm-dark">{currentWeather.currentTemp}°C</span>
+                  <span className="text-xs text-farm-muted font-medium mt-1">{currentWeather.condition}</span>
+                  <p className="text-xs text-farm-muted mt-2 flex items-center justify-center gap-2">
+                    <span>💧 {currentWeather.humidity}%</span>
+                    <span>💨 {currentWeather.windKmh} km/h</span>
+                  </p>
+                  <div className="mt-2 flex items-center justify-center gap-1.5 flex-wrap">
+                    {isRealFarm && liveWeather ? (
+                      <>
+                        <SourceBadge live={{ source: "Open-Meteo", asOf: liveWeather.provenance.fetched_at }} />
+                        <span className="text-[10px] text-farm-muted">
+                          fetched{" "}
+                          {new Date(liveWeather.provenance.fetched_at).toLocaleTimeString("en-IN", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </>
+                    ) : (
+                      <SourceBadge demo />
+                    )}
+                  </div>
+                </>
+              )
+            )}
           </div>
         </div>
 
@@ -385,7 +414,7 @@ export default function DashboardPage() {
               </h3>
               <p className="text-xs text-farm-muted leading-relaxed mt-1">
                 {currentFarm.water.nextRecommendedAction} Foliar nutrient absorption is currently optimal under{" "}
-                {currentFarm.weather.currentTemp}°C temperature conditions.
+                {currentWeather?.currentTemp ?? currentFarm.weather.currentTemp}°C temperature conditions.
               </p>
             </div>
             <Link
@@ -473,110 +502,35 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Quick Tools ── */}
+        {/* ── 7-Day Weather Forecast & Details (farmwise location) ── */}
         <div className="space-y-3">
           <h2 className="text-sm font-bold uppercase tracking-wider text-farm-dark flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-farm-green" />
-            Quick Tools
+            <CloudSun className="w-4 h-4 text-sky-600" />
+            7-Day Weather Forecast — {currentFarm.name}
           </h2>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Link
-              href={`/satellite?farm=${currentFarm.id}`}
-              className="bg-white rounded-2xl border border-farm-border-color p-4 hover:border-farm-green hover:shadow-card transition-all group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                <Satellite className="w-5 h-5" />
-              </div>
-              <p className="text-xs font-bold text-farm-dark group-hover:text-farm-green">Satellite Analysis</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">NDVI · NDWI · Stress</p>
-            </Link>
-
-            <button
-              type="button"
-              onClick={() => setCalcOpen(!calcOpen)}
-              className="text-left bg-white rounded-2xl border border-farm-border-color p-4 hover:border-farm-green hover:shadow-card transition-all group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                <Calculator className="w-5 h-5" />
-              </div>
-              <p className="text-xs font-bold text-farm-dark group-hover:text-farm-green">Fertilizer & NPK</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">Dosage calculator</p>
-            </button>
-
-            <Link
-              href="/ai-chat"
-              className="bg-white rounded-2xl border border-farm-border-color p-4 hover:border-purple-400 hover:shadow-card transition-all group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                <Brain className="w-5 h-5" />
-              </div>
-              <p className="text-xs font-bold text-farm-dark group-hover:text-purple-700">KrishiBot AI</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">Ask crop questions</p>
-            </Link>
-
-            <Link
-              href="/weather"
-              className="bg-white rounded-2xl border border-farm-border-color p-4 hover:border-sky-400 hover:shadow-card transition-all group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                <CloudSun className="w-5 h-5" />
-              </div>
-              <p className="text-xs font-bold text-farm-dark group-hover:text-sky-700">Weather Forecast</p>
-              <p className="text-[11px] text-farm-muted mt-0.5">7 day forecast</p>
-            </Link>
-          </div>
-
-          {/* Quick Interactive Fertilizer Calculator Widget */}
-          {calcOpen && (
-            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 animate-in fade-in space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-farm-dark">Quick Fertilizer Dosage</span>
-                <button onClick={() => setCalcOpen(false)} className="text-xs text-farm-muted hover:text-farm-dark">
-                  ✕
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <label className="text-[10px] text-farm-muted block mb-0.5">Acreage</label>
-                  <input
-                    type="number"
-                    min={0.5}
-                    step={0.5}
-                    value={calcAcreage}
-                    onChange={(e) => setCalcAcreage(parseFloat(e.target.value) || 1)}
-                    className="w-full px-2 py-1 bg-white border border-farm-border-color rounded-lg text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-farm-muted block mb-0.5">Crop</label>
-                  <select
-                    value={calcCrop}
-                    onChange={(e) => setCalcCrop(e.target.value)}
-                    className="w-full px-2 py-1 bg-white border border-farm-border-color rounded-lg text-xs"
-                  >
-                    <option value="Onion">Onion</option>
-                    <option value="Wheat">Wheat</option>
-                    <option value="Rice">Rice</option>
-                    <option value="Sugarcane">Sugarcane</option>
-                  </select>
-                </div>
-              </div>
-              <div className="p-2.5 bg-white rounded-xl text-xs space-y-1 border border-emerald-200/60">
-                <div className="flex justify-between">
-                  <span className="text-farm-muted">Urea (46% N):</span>
-                  <strong className="text-farm-dark">{(calcAcreage * 45).toFixed(0)} kg</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-farm-muted">DAP (18:46):</span>
-                  <strong className="text-farm-dark">{(calcAcreage * 30).toFixed(0)} kg</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-farm-muted">MOP (Potash):</span>
-                  <strong className="text-farm-dark">{(calcAcreage * 25).toFixed(0)} kg</strong>
-                </div>
-              </div>
+          {isRealFarm && weatherLoading ? (
+            <div className="bg-white rounded-2xl border border-farm-border-color p-6 flex items-center justify-center gap-2 text-sm text-farm-muted">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading forecast…
             </div>
+          ) : isRealFarm && weatherError ? (
+            <div className="bg-white rounded-2xl border border-farm-border-color p-6 text-sm text-red-700 text-center">
+              Couldn&apos;t load the forecast.{" "}
+              <button onClick={() => retryWeather()} className="font-semibold underline">
+                Retry
+              </button>
+            </div>
+          ) : (
+            currentWeather && (
+              <FarmWeatherReport
+                farmName={currentFarm.name}
+                location={currentFarm.address}
+                crop={currentFarm.crop}
+                weather={{ ...currentWeather, forecast10Days: currentWeather.forecast10Days.slice(0, 7) }}
+                isLive={isRealFarm && !!liveWeather}
+                fetchedAt={liveWeather?.provenance.fetched_at ?? null}
+              />
+            )
           )}
         </div>
       </div>

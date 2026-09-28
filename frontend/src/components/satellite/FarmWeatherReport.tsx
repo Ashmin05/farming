@@ -119,11 +119,17 @@ export default function FarmWeatherReport({
   location,
   crop,
   weather,
+  isLive = false,
+  fetchedAt = null,
 }: {
   farmName: string;
   location: string;
   crop: string;
   weather: FarmDetailedWeather;
+  /** True when `weather` came from a live backend forecast (Open-Meteo) rather than demo data. */
+  isLive?: boolean;
+  /** ISO datetime the live forecast was fetched -- ignored when isLive is false. */
+  fetchedAt?: string | null;
 }) {
   const [selectedDayIdx, setSelectedDayIdx] = useState(0);
   const activeDay = weather.forecast10Days[selectedDayIdx] || weather.forecast10Days[0];
@@ -140,7 +146,7 @@ export default function FarmWeatherReport({
             <div className="flex items-center gap-2">
               <h3 className="font-bold text-farm-dark text-base">Weather & Forecast</h3>
               <span className="text-xs bg-sky-100 text-sky-800 font-semibold px-2 py-0.5 rounded-full">
-                10-Day Live Outlook
+                {weather.forecast10Days.length}-Day {isLive ? "Live" : "Demo"} Outlook
               </span>
             </div>
             <p className="text-xs text-farm-muted mt-0.5">
@@ -150,8 +156,14 @@ export default function FarmWeatherReport({
         </div>
 
         <div className="flex items-center gap-2 text-xs text-farm-muted">
-          <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Local Weather Station Active</span>
+          <span className={`inline-block w-2 h-2 rounded-full ${isLive ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
+          <span>
+            {isLive
+              ? fetchedAt
+                ? `Live · fetched ${new Date(fetchedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`
+                : "Live Weather Station Active"
+              : "Demo data · sign in for a live forecast"}
+          </span>
         </div>
       </div>
 
@@ -279,7 +291,7 @@ export default function FarmWeatherReport({
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-bold text-farm-muted uppercase tracking-wider flex items-center gap-1.5">
               <Calendar className="w-4 h-4 text-farm-green" />
-              10-Day Precipitation & Thermal Forecast
+              {weather.forecast10Days.length}-Day Precipitation & Thermal Forecast
             </h4>
             <span className="text-xs text-farm-muted">Click a day for crop advice</span>
           </div>

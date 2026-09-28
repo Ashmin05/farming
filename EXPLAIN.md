@@ -103,6 +103,12 @@ what's pushed to origin and described by this document. Notable merged work, rou
 - `market-sugarcane-crop` — fixed Sugarcane being silently missing from the Market page's crop
   dropdown despite being one of the five allowed crops, and added an honest "no data" notice for
   it instead of a blank page (§5.16).
+- `weather` — a real Open-Meteo-backed weather forecast endpoint, replacing the Dashboard's Field
+  Weather card's synthetic data for real farms (§5.17).
+- `irrigation` — a real FAO-56 crop-coefficient irrigation model: a daily root-zone depletion
+  balance per farm (CHIRPS/Open-Meteo history + forecast, NDVI-adjustable Kc, soil-texture-derived
+  available water), with a farmer irrigation log and a "next irrigation date + depth" endpoint
+  (§5.18). Backend-only so far, same as §5.6 before §5.7 existed.
 
 ---
 
@@ -266,6 +272,8 @@ backend/
 │   │   └── satellite_health.py  # health-score math + generic benchmark curve, EE-free (§5.6)
 │   ├── ml/
 │   │   ├── crop_benchmarks.py  # per-crop NDVI-by-growth-stage reference curves (§5.9)
+│   │   ├── irrigation_kc.py    # FAO-56 Kc/root-depth-by-growth-stage tables + NDVI-Kc formula (§5.18)
+│   │   ├── soil_water.py       # soil-texture -> available water capacity lookup (§5.18)
 │   │   └── price_forecast/     # mandi price forecasting (§5.14)
 │   │       ├── dataset.py      #   leakage-safe features + targets per market x day
 │   │       ├── models.py       #   baselines (naive/MA/seasonal) + ridge/RF/LightGBM(+Huber)
@@ -281,6 +289,9 @@ backend/
 │   │   ├── satellite_layer_set.py  # SatelliteLayerSet ORM model — cached tile URLs (§5.10)
 │   │   ├── stress_zone.py  # StressZone ORM model — vectorized zones (§5.10)
 │   │   ├── environment_snapshot.py  # EnvironmentSnapshot ORM model — rainfall/temp/soil (§5.11)
+│   │   ├── weather_cache.py  # WeatherCache ORM model — cached Open-Meteo forecast (§5.17)
+│   │   ├── irrigation_plan.py  # IrrigationPlan ORM model — root-zone water balance (§5.18)
+│   │   ├── irrigation_log.py  # IrrigationLog ORM model — farmer-reported irrigation events (§5.18)
 │   │   └── market_price.py  # mandi catalogue (states/districts/markets/commodities/varieties/grades),
 │   │                        # market_prices, daily series, stats, ingestion runs, quality issues,
 │   │                        # backfill jobs/tasks, forecast models + forecasts (§5.14)
@@ -291,6 +302,8 @@ backend/
 │   │   ├── timeseries.py  # pydantic request/response models for timeseries + alerts (§5.9)
 │   │   ├── map_layers.py  # pydantic request/response models for /satellite/layers (§5.10)
 │   │   ├── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
+│   │   ├── weather.py      # pydantic request/response models for /farms/{id}/weather (§5.17)
+│   │   ├── irrigation.py   # pydantic request/response models for /farms/{id}/irrigation(/log) (§5.18)
 │   │   └── market_prices.py  # pydantic response models for /market-prices/* (§5.14)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
@@ -301,10 +314,14 @@ backend/
 │   │   ├── satellite_layer_repository.py  # DB queries for SatelliteLayerSet, incl. upsert (§5.10)
 │   │   ├── stress_zone_repository.py  # DB queries for StressZone, replace-not-accumulate (§5.10)
 │   │   ├── environment_snapshot_repository.py  # DB queries for EnvironmentSnapshot, partial upsert (§5.11)
+│   │   ├── weather_cache_repository.py  # DB queries for WeatherCache, incl. upsert (§5.17)
+│   │   ├── irrigation_plan_repository.py  # DB queries for IrrigationPlan, incl. upsert (§5.18)
+│   │   ├── irrigation_log_repository.py  # DB queries for IrrigationLog (§5.18)
 │   │   └── market_price_repository.py  # price bulk insert/update, ingestion runs, quality issue log (§5.14)
 │   ├── integrations/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
-│   │   ├── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11)
+│   │   ├── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11, §5.18)
+│   │   ├── open_meteo_client.py # Open-Meteo forecast + historical-archive client, key-free (§5.17, §5.18)
 │   │   └── market_prices/       # mandi price providers behind one interface (§5.14)
 │   │       ├── base.py          #   PriceDataProvider, NormalizedMarketPrice, catalogue types
 │   │       ├── agmarknet.py     #   Agmarknet 2.0 (primary)
@@ -316,6 +333,8 @@ backend/
 │   │   ├── auth_service.py      # business logic: register/login/refresh/google login
 │   │   ├── farm_service.py      # business logic: create/list/update/delete farms
 │   │   ├── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
+│   │   ├── weather_service.py   # business logic: cached Open-Meteo forecast + flags (§5.17)
+│   │   ├── irrigation_service.py # business logic: FAO-56 water balance + irrigation log (§5.18)
 │   │   └── market_prices/       # mandi price pipeline (§5.14): validation, catalog (sync +
 │   │                            # resolver), ingestion, backfill, analytics, quality, nearby,
 │   │                            # watchlist, queries (API read side)
@@ -325,6 +344,8 @@ backend/
 │   │   ├── farms.py       # farm CRUD, all scoped to the current user
 │   │   ├── satellite.py   # satellite refresh/latest/timeseries/layers/environment + background-refresh helper
 │   │   ├── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
+│   │   ├── weather.py     # GET /farms/{id}/weather (§5.17)
+│   │   ├── irrigation.py  # GET /farms/{id}/irrigation, POST /farms/{id}/irrigation/log (§5.18)
 │   │   └── market_prices.py  # GET /market-prices/*, GET /farms/{id}/market-prices, GET /farms/{id}/market/forecast (§5.14, §5.15)
 │   ├── jobs/
 │   │   ├── scheduler.py   # APScheduler jobs: timeseries+alerts (§5.9), environment (§5.11), mandi prices (§5.14)
@@ -335,7 +356,7 @@ backend/
 │                            # ingest_market_prices, backfill_market_prices, market_price_report,
 │                            # geocode_markets, train_price_models
 ├── models_store/            # trained price models (gitignored, PRICE_MODEL_DIR)
-└── tests/                   # pytest suite (async, in-memory SQLite): 252 tests
+└── tests/                   # pytest suite (async, in-memory SQLite): 286 tests
     └── fixtures/market_prices/  # trimmed copies of real Agmarknet/CEDA responses
 ```
 
@@ -368,6 +389,9 @@ Earth Engine, the mandi price sources) behind a small interface the rest of the 
 | PATCH | `/alerts/{alert_id}/read` | Mark one alert read — 404 (never 403) if it's not yours (§5.9) |
 | GET | `/farms/{farm_id}/satellite/layers?date=` | Visualised tile URLs (true colour/NDVI/NDWI/EVI/stress) + vectorized stress zones for one scene, cached ~12h; defaults `date` to the farm's latest analysis (§5.10) |
 | GET | `/farms/{farm_id}/environment` | Cache-only read of rainfall (CHIRPS)/land-surface temperature (MODIS)/soil moisture (SMAP, regional), refreshed nightly, plus soil pH/organic carbon/texture (OpenLandMap, static, fetched once); each section carries its own provenance + native resolution; 404 if no report yet (§5.11) |
+| GET | `/farms/{farm_id}/weather` | 10-day Open-Meteo forecast for the farm's centroid (temperature, precipitation, wind, humidity, UV, ET0) with heavy-rain/heat-stress/good-spray-window flags per day, cached 3h; never 404s — the first call fetches live (§5.17) |
+| GET | `/farms/{farm_id}/irrigation` | FAO-56 root-zone water balance: current depletion vs. readily available water, and the next modelled irrigation date + depth (mm); never 404s — the first call computes a plan from scratch (§5.18) |
+| POST | `/farms/{farm_id}/irrigation/log` | Record a farmer-reported irrigation event (date + depth mm), returns the recomputed plan (§5.18) |
 | GET | `/market-prices/commodities`, `/locations`, `/markets` | Mandi catalogue with stored prices: commodities, states + districts, markets (with coordinates if known) (§5.14) |
 | GET | `/market-prices/latest?commodity=&state=&district=` | Each market's latest price with its precomputed analytics + `provenance` {sources, as_of, is_stale, last ingestion run} (§5.14) |
 | GET | `/market-prices?commodity=&from=&to=&page=` | Individual stored reports (variety/grade level), paginated (§5.14) |
@@ -380,8 +404,9 @@ Earth Engine, the mandi price sources) behind a small interface the rest of the 
 | GET | `/farms/{farm_id}/market-prices` | The farm's crop mapped to mandi commodities + nearby markets from its centre point; 404 if not yours (§5.14) |
 | GET | `/farms/{farm_id}/market/forecast?commodity_id=&market_id=` | The farm's crop at the nearest mandi with a forecast (or the given crop/mandi): live price, 90-day history, 7/14/30-day estimates, nearby mandis and a sell-now / hold-N-days suggestion; 404 if not yours or an unknown crop/mandi (§5.15) |
 
-Still not implemented server-side: `/fields`, `/weather`, `/irrigation`, `/yield`, chat. Those
-remain frontend-mock-only for now (§4.2).
+Still not implemented server-side: `/fields`, `/yield`, chat. Those remain frontend-mock-only for
+now (§4.2). (`/weather` and `/irrigation` are real as of §5.17/§5.18 -- this line wasn't updated
+when §5.17 landed.)
 
 ### 5.3 CORS
 
@@ -556,10 +581,9 @@ these, since they only exercise the `_get_info` boundary, not real Earth Engine 
 
 *(Historical note — this was the gap list right after §5.7. Most of it has since been closed: the
 timeseries (§5.9), real stress zones and map layers (§5.10), soil pH/organic carbon/texture and
-soil moisture (§5.11), and wiring all of it into the UI (§5.12).)* What remains synthetic even for
-signed-in users: **soil N-P-K** (not remotely sensed — needs a soil test or a different data
-source) and **weather** (no weather API is integrated; `WEATHER_API_KEY` is reserved but unused).
-NDMI is computed and stored (§5.6) but not surfaced in the UI.
+soil moisture (§5.11), wiring all of it into the UI (§5.12), and weather (§5.17).)* What remains
+synthetic even for signed-in users: **soil N-P-K** (not remotely sensed — needs a soil test or a
+different data source). NDMI is computed and stored (§5.6) but not surfaced in the UI.
 
 ### 5.9 NDVI/NDWI/EVI timeseries, benchmark alerts, and the nightly scheduler job
 
@@ -762,7 +786,8 @@ labelled with a **"Demo data"** badge. Guest farm ids never hit the network (`is
 - **`components/satellite/EnvironmentReportCard.tsx`**: rainfall / land-surface heat / soil moisture
   / soil sections from `/environment`, each with its own badge. The Dashboard's Soil card shows real
   pH, texture and organic carbon, and its Moisture card shows real NDWI plus SMAP soil moisture
-  (regional). Soil N-P-K and the weather card remain demo, since there's no source for them (§5.8).
+  (regional). Soil N-P-K remains demo, since there's no source for it (§5.8); the Field Weather
+  card went live in §5.17.
 - **`components/dashboard/AlertsStrip.tsx`**: unread alerts for the selected farm with severity,
   pass date, the backend's message and a **Mark as read** button. It replaces the demo weather
   banner for real farms; guests still see the demo banner.
@@ -1208,6 +1233,134 @@ Verified live: the crop dropdown lists exactly Rice/Wheat/Onion/Sugarcane/Potato
 Sugarcane shows the new notice with no blank/broken sections; switching back to any real crop
 (Wheat) still renders full live price/mandi/sell-hold sections with no regression.
 
+### 5.17 Real weather forecast (Open-Meteo) (`weather` branch)
+
+Closes the last of §5.8's "still synthetic" gaps — the Dashboard's Field Weather card now has a
+real backend behind it, the same live/demo split as satellite and environment:
+
+- **`app/integrations/open_meteo_client.py`** — an `httpx`-based async client for
+  `api.open-meteo.com/v1/forecast`, key-free (no `configured` gate, unlike Earth Engine or the paid
+  mandi-price providers) with its own retry/backoff (`tenacity`, 4 attempts, exponential 2-30s,
+  retrying only network errors/429/5xx) rather than reusing `market_prices/http.py`'s helper, to
+  keep weather's error types independent of the mandi-price domain. Requests the farm centroid's
+  daily temperature max/min, precipitation sum/probability, wind speed, relative humidity, UV index
+  and `et0_fao_evapotranspiration`, `timezone=Asia/Kolkata`, for the next `FORECAST_DAYS = 10` days.
+- **`WeatherService.get_weather(farm)`** (`app/services/weather_service.py`) maps the raw forecast
+  into the response shape the frontend's `FarmDetailedWeather` (`FarmWeatherReport.tsx`) needs, and
+  derives three per-day flags from fixed thresholds: `heavy_rain` (>25mm/day), `heat_stress`
+  (>38°C), `good_spray_window` (rain probability <20% and wind <15 km/h). Same cache-read-through
+  pattern as `SatelliteService.get_or_build_layers` (§5.10) — a `WeatherCache` row per farm
+  (`daily` stored as JSON rather than one column per field, so a new Open-Meteo variable never needs
+  a migration), refetched only once `expires_at` (`generated_at + WEATHER_CACHE_HOURS`, 3h) has
+  passed; unlike satellite analysis there's no separate `/refresh` endpoint, since Open-Meteo is
+  free enough that a single `GET` can always serve fresh-enough data itself.
+- **`GET /farms/{id}/weather`** (`app/routers/weather.py`) — farm-ownership-checked the same way as
+  every other `/farms/{id}/...` route (`FarmService.get_farm`), 503 on an Open-Meteo failure, and
+  (unlike `/satellite/latest`) never 404s: the first call for a farm just fetches live.
+- **Frontend**: `lib/api/weather-client.ts` + `lib/hooks/useFarmWeather.ts` follow the
+  `satellite-client.ts`/`useFarmEnvironment.ts` pattern exactly (§5.12), gated by the same
+  `isRealFarmId` check, `staleTime` matched to the backend's 3h cache. `farmStore.ts`'s
+  `applyLiveWeather(base, weather)` overlays the live forecast onto the demo `FarmDetailedWeather`
+  the same way `applyLiveSatellite` does (§5.7) — condition/icon are approximated from
+  precipitation sum/probability since Open-Meteo's daily block has no cloud-cover field in what's
+  requested here; `feelsLike`/`windDir`/`pressureHpa` have no live source and stay as the demo
+  value. `DashboardPage.tsx`'s Field Weather card gained the same
+  loading/error/`SourceBadge`(`live`/`demo`) treatment as the Soil and Canopy Moisture cards, with
+  the live badge showing both the Open-Meteo pass date and the exact local time the forecast was
+  fetched (`provenance.fetched_at`).
+- **Verification**: `pytest backend/tests/test_weather_service.py` (fetch-and-cache, cache reuse,
+  expired-cache refetch, `OpenMeteoError` → `WeatherServiceError` wrapping, per-day flag
+  derivation) plus the full existing suite, 263/263 passing; `GET /farms/{id}/weather` confirmed
+  registered via `app.openapi()`; frontend `tsc --noEmit` and `eslint` both clean; the guest/demo
+  Dashboard path confirmed live in-browser (Field Weather card renders with a "Demo data" badge, no
+  console errors). The live, signed-in path (`SourceBadge live={...}`, real Open-Meteo data) is
+  exercised by the unit tests but wasn't separately smoke-tested end-to-end in a browser this round
+  — local account registration in this dev environment hung on the database call, an environment
+  issue unrelated to this feature's code.
+
+### 5.18 Irrigation recommendation — FAO-56 water balance (`irrigation` branch)
+
+A real per-farm irrigation model, built on top of §5.17's weather forecast and §5.11's soil/rainfall
+data rather than a fixed rule of thumb:
+
+- **The model, in one line**: a daily root-zone depletion balance, `depletion += ETc - effective_rain
+  - logged_irrigation`, where `ETc = ET0 x Kc` (FAO-56 single crop coefficient method). Depletion is
+  clamped to `[0, TAW]`; irrigation is recommended once it's projected to cross `RAW = p x TAW`
+  (readily available water).
+- **`app/ml/irrigation_kc.py`** — per-crop FAO-56 stage tables (initial/development/mid/late-season
+  lengths, Kc_ini/Kc_mid/Kc_end, root-depth min/max, depletion fraction `p`), reusing
+  `interpolate_benchmark_curve` from `app/core/satellite_health.py` (§5.6) to turn each crop's stage
+  lengths into a piecewise-linear Kc-by-day-since-sowing curve — same clamp-at-the-ends behaviour as
+  the NDVI benchmark curves, just a different curve. Covers the five currently farm-registerable crops
+  (rice, wheat, onion, sugarcane, potato, §5.16) plus the other crops `crop_benchmarks.py` already has
+  NDVI curves for; an unrecognised crop falls back to a generic mid-range profile. **Typical published
+  FAO-56 figures, not a site-calibrated agronomic dataset** — same caveat as §5.9's NDVI curves.
+  `ndvi_adjusted_kc()` implements the optional NDVI override: `Kc ~ 1.25 x NDVI + 0.1`, clamped to the
+  crop's own `[kc_min, kc_max]` — used instead of the stage curve whenever the farm has a satellite
+  observation (§5.6) less than `NDVI_MAX_AGE_DAYS` (20) old.
+- **`app/ml/soil_water.py`** — USDA texture class → available water capacity (mm of plant-available
+  water per metre of root depth), keyed on the exact strings `EarthEngineClient.get_soil_properties`
+  (§5.11) returns, so a farm's `EnvironmentSnapshot.soil_texture_class` maps straight through.
+  `TAW = AWC x root_depth`. No soil reading yet (no `EnvironmentSnapshot`, or its OpenLandMap fetch
+  hasn't run) falls back to a mid-range "Loam" texture — always surfaced honestly via the response's
+  `soil_texture_is_default` flag, never silently assumed.
+- **Two new historical data sources**, both reused/extended from existing integrations rather than a
+  new provider:
+  - **`OpenMeteoClient.get_historical()`** (`app/integrations/open_meteo_client.py`) — a second
+    endpoint (`archive-api.open-meteo.com`) on the same key-free client as §5.17's forecast, for past
+    ET0 (the forecast endpoint only ever looks ahead). Also returns precipitation as a fallback rain
+    source. The shared retry/parsing logic was factored out into `_fetch()` so both endpoints use it.
+  - **`EarthEngineClient.get_rainfall_daily_series()`** (`app/integrations/earth_engine_client.py`) —
+    daily CHIRPS precipitation over a date range, the per-day counterpart to §5.11's
+    `_get_rainfall_summary` (which only returns rolling-window totals). Same one-`.map()`-then-one-
+    `getInfo()` FeatureCollection pattern as `_get_temperature_summary`. Preferred over Open-Meteo's
+    reanalysis precipitation when Earth Engine is configured and reachable; falls back to it
+    (`EarthEngineNotConfiguredError`/timeout/request errors are caught) otherwise — same graceful-
+    degradation principle used everywhere else Earth Engine is optional.
+- **`IrrigationService.get_plan(farm)`** (`app/services/irrigation_service.py`) is the orchestrator:
+  1. Loads the farm's `IrrigationPlan` row (one per farm, like `WeatherCache`/`EnvironmentSnapshot` —
+     not a timeseries) if one exists; starts depletion at 0 (field capacity) otherwise, anchored to
+     `sowing_date - 1 day` and capped at `MAX_BACKFILL_DAYS` (180) back so an old/perennial field's
+     first-ever computation can't trigger an unbounded history fetch.
+  2. Resolves today's Kc (NDVI-adjusted or stage-curve) and root depth once, and applies that single
+     value across this whole call's roll-forward *and* forward projection — a deliberate simplification
+     (reconstructing a full historical per-day Kc/NDVI series is out of scope for a demo-grade model),
+     noted here rather than left implicit.
+  3. **Rolls the balance forward** from the day after `computed_through` through yesterday, using the
+     historical ET0/rain sources above plus any `IrrigationLog` rows for those dates, stopping at the
+     first day data isn't available for yet (CHIRPS/the archive both lag a few days) rather than
+     guessing. `computed_through` only advances as far as it actually processed.
+  4. **Projects forward** over the cached Open-Meteo forecast (via `WeatherService.get_weather`, so it
+     shares that 3h cache rather than making a second Open-Meteo call) to find the first day depletion
+     is projected to cross RAW — that's `next_irrigation_date` / `next_irrigation_depth_mm` (capped at
+     TAW: irrigate back to field capacity, not beyond). Already past RAW as of yesterday short-circuits
+     this to "now" without needing the forecast at all.
+  5. Upserts the `IrrigationPlan` row and returns it, labelled `basis: "Modelled"` throughout.
+- **Effective rainfall**: a simplified rule of thumb — a day's rain counts only once it's above 5mm
+  (smaller amounts are assumed lost to interception/evaporation before reaching the root zone), and
+  only 80% of the rain above that threshold reaches the crop. This specific interpretation (a
+  threshold-then-fraction rule, not "80% of the excess over 5mm") is a judgement call the spec text
+  didn't fully pin down, documented here and in `EFFECTIVE_RAIN_THRESHOLD_MM`/`EFFECTIVE_RAIN_FRACTION`.
+- **`irrigation_plans` / `irrigation_logs` tables** (`app/models/irrigation_plan.py`,
+  `irrigation_log.py`, migration `79c227277080_add_irrigation_plans_and_logs_tables.py`).
+  `IrrigationLogRepository` is otherwise a plain insert/list — the interesting logic is in how
+  `IrrigationService.log_irrigation()` applies a log: a date already folded into `computed_through`
+  (a backdated log) is subtracted from the stored `depletion_mm` immediately, since a future
+  roll-forward will never revisit that day; a log for today/a pending day needs no special handling —
+  the normal roll-forward picks it up the next time `get_plan` processes that date.
+- **`GET /farms/{id}/irrigation`** / **`POST /farms/{id}/irrigation/log`** (`app/routers/irrigation.py`)
+  — same farm-ownership-checked, 404-never-403 pattern as every other `/farms/{id}/...` route; 503 on
+  an Open-Meteo forecast failure (only reachable when the plan isn't already in deficit, per step 4
+  above), 400 on an invalid log (non-positive depth, future date). `GET` never 404s, matching
+  `/weather` — the first call computes a plan from scratch.
+- **Not done in this pass**: no frontend wiring (`useIrrigation`/`lib/api/` still serve the mock
+  `farmStore.ts` data, §4.2) — this branch is backend-only, same as §5.6 before §5.7 existed. No test
+  exercises live Earth Engine/Open-Meteo archive calls (same as the rest of `earth_engine_client.py`);
+  `tests/test_irrigation_kc.py` covers the pure Kc/root-depth/TAW math and
+  `tests/test_irrigation_service.py` covers the service against mocked clients (roll-forward math,
+  CHIRPS-preferred-over-archive fallback, backdated-log adjustment, NDVI-driven Kc) — 23 new tests,
+  286/286 passing overall.
+
 ---
 
 ## 6. Authentication system (the main feature built so far)
@@ -1408,7 +1561,7 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `ENVIRONMENT` | Backend | `development` / `staging` / `production` |
 | `DATABASE_URL` | Backend | Async SQLAlchemy/Postgres connection string (`postgresql+asyncpg://...`) |
 | `FRONTEND_ORIGIN` | Backend | Sole allowed CORS origin |
-| `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | Backend | Reserved for future `app/integrations/` clients — unused today |
+| `WEATHER_API_KEY` / `SATELLITE_API_KEY` / `AI_API_KEY` | Backend | Reserved for future `app/integrations/` clients — unused today. Real weather (§5.17) uses Open-Meteo, which is free and key-free, so `WEATHER_API_KEY` stays unused/reserved for a future paid provider |
 | `CEDA_API_KEY` | Backend | CEDA Agri Market API bearer key (§5.14). Optional: historical fallback archive to 2025-10-30, 40 requests/hour. Backend only, never in `frontend/.env` |
 | `DATA_GOV_IN_API_KEY` | Backend | data.gov.in API key (§5.14). Optional, latest day only; free at https://data.gov.in |
 | `MARKET_PRICE_PROVIDERS` | Backend | Provider fallback order, default `agmarknet,ceda,data_gov_in`. Agmarknet 2.0 needs no key; providers without a key are skipped |
@@ -1517,12 +1670,14 @@ npm run dev    # http://localhost:3000
 | Satellite map tiles (true colour/NDVI/NDWI/EVI/stress) | ✅ Real for real farms — `GET /farms/{id}/satellite/layers` returns live Earth Engine tile URLs clipped to the farm polygon, rendered as a raster overlay on the map; see §5.10 |
 | Stress-zone detection + map overlay | ✅ Real for real farms — per-pixel NDVI vectorized into zones (water-stress/nutrient-pest), drawn as clickable polygons on the map; guest/demo farms still show the synthetic stress-zone list; see §5.10 |
 | Farm environment report (backend) | ✅ Real — nightly `AsyncIOScheduler` job (02:30) refreshes every farm's CHIRPS rainfall, MODIS land-surface temperature, and SMAP soil moisture, plus OpenLandMap soil pH/organic carbon/texture on a farm's first-ever refresh; `GET /farms/{id}/environment` is a cache-only read of the result, each section with its own provenance/resolution; see §5.11. Shown on the Satellite page (environment card) and the Dashboard's soil/moisture cards for real farms (§5.12) |
-| Soil pH/N-P-K, weather | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K and weather are still demo values, since no data source exists for them yet |
+| Soil pH/N-P-K | 🟡 Partial — real soil pH/organic carbon/texture are shown for real farms (§5.12); N-P-K is still a demo value, since no data source exists for it yet |
+| Field Weather forecast | ✅ Real for real farms — `GET /farms/{id}/weather` reads a farm's centroid forecast from Open-Meteo (temperature, precipitation, wind, humidity, UV, ET0), cached 3h, with heavy-rain/heat-stress/good-spray-window flags per day; Dashboard's Field Weather card shows it with a "Live" badge and fetched time; guests see the demo values labelled "Demo data"; see §5.17 |
 | Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms. The crop selector is capped at five crops app-wide (Rice, Wheat, Onion, Sugarcane, Potato, §5.16); Sugarcane has no real mandi data anywhere (mills buy it directly, not via APMC auctions) and honestly says so instead of faking a number |
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
 | Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
 | Dashboard "Agri News" cards / Harvest Estimation's "Target Mandi Rate" | ❌ Sample. The news cards are now labelled "Sample"; the harvest card is still part of the generated demo yield module |
-| Fields / Weather / Irrigation / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints beyond farms/satellite exist yet |
+| Irrigation recommendation (backend) | ✅ Real — `GET /farms/{id}/irrigation` computes a FAO-56 root-zone water balance (depletion vs. readily available water) from CHIRPS/Open-Meteo history + forecast, soil texture, and optionally NDVI; `POST .../irrigation/log` records farmer irrigation; see §5.18. **Not wired into the frontend yet** — the Dashboard/Satellite pages still show `farmStore.ts`'s synthetic irrigation data for every account, real or guest |
+| Fields / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints exist yet |
 | KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
 | "Remember me" checkbox on login | ❌ Removed — was UI-only and never did anything |
@@ -1579,9 +1734,18 @@ npm run dev    # http://localhost:3000
   whose polygon actually has clear historical Sentinel-2 passes, producing a real stored timeseries
   and a real alert) hasn't been observed live yet — the one test polygon used for live verification
   happened to have persistent heavy cloud cover in its analysis window.
-- Build real backend endpoints for fields/weather/irrigation/yield, and a corresponding
-  `real-client.ts` cutover (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the
-  farms/satellite API.
+- Build real backend endpoints for fields/yield, and a corresponding `real-client.ts` cutover
+  (`NEXT_PUBLIC_USE_MOCKS=false`) for whatever isn't covered by the farms/satellite/weather/irrigation
+  API.
+- **Wire `GET /farms/{id}/irrigation` into the frontend** (§5.18) — `useIrrigation` and the
+  Dashboard/Satellite irrigation cards still show `farmStore.ts`'s synthetic data for every account.
+  The same `isRealFarmId`-gated hook + `SourceBadge` pattern used for weather (§5.17) and environment
+  (§5.12) would apply directly.
+- **Irrigation's per-call Kc/root-depth is a single snapshot, not a true historical reconstruction**
+  (§5.18) — the roll-forward over historical days and the forward projection both use *today's*
+  resolved Kc, not a day-by-day recomputation from what NDVI/growth-stage actually was on each of
+  those past days. Reasonable for a demo model over a period of days-to-weeks, but would drift for a
+  farm that hasn't opened its irrigation plan in a long time (bounded by `MAX_BACKFILL_DAYS`, 180).
 - Add email verification (registration currently trusts any email address given).
 - Add authenticated route protection (currently `/dashboard` etc. are reachable without being
   logged in — they just show guest demo data instead of redirecting to `/login`; that's an

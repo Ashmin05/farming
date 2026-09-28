@@ -907,6 +907,50 @@ class EarthEngineClient:
             as_of=end_date,
         )
 
+    async def get_rainfall_daily_series(
+        self, polygon_geojson: dict, start_date: date, end_date: date
+    ) -> list[tuple[date, float]]:
+        """Daily CHIRPS precipitation (mm) over the farm's polygon for
+        `start_date`..`end_date` inclusive -- used by IrrigationService
+        (app/services/irrigation_service.py) to roll its root-zone
+        depletion balance forward day by day. Same one-`.map()`-then-one-
+        `getInfo()` principle as _get_temperature_summary; a day CHIRPS
+        hasn't backfilled yet (or with no valid pixels) is simply absent
+        from the result rather than zero-filled, so callers can tell "no
+        rain" from "no data"."""
+        if not self.configured:
+            raise EarthEngineNotConfiguredError(self.init_error or "Earth Engine is not configured.")
+        if start_date > end_date:
+            return []
+
+        geometry = ee.Geometry(polygon_geojson)
+        collection = (
+            ee.ImageCollection(CHIRPS_COLLECTION_ID)
+            .filterDate(start_date.strftime("%Y-%m-%d"), (end_date + timedelta(days=1)).strftime("%Y-%m-%d"))
+            .select("precipitation")
+        )
+
+        def to_feature(image):
+            mm = image.reduceRegion(
+                reducer=ee.Reducer.mean(), geometry=geometry, scale=SMALL_FIELD_REDUCE_SCALE_M, bestEffort=True
+            ).get("precipitation")
+            return ee.Feature(None, {"date": image.date().format("YYYY-MM-dd"), "mm": mm})
+
+        raw = await self._get_info(
+            ee.FeatureCollection(collection.map(to_feature)), timeout=ENVIRONMENT_TIMEOUT_SECONDS
+        )
+        features = (raw or {}).get("features", [])
+
+        days: list[tuple[date, float]] = []
+        for feature in features:
+            props = feature.get("properties", {})
+            mm = props.get("mm")
+            day_str = props.get("date")
+            if mm is None or day_str is None:
+                continue
+            days.append((date.fromisoformat(day_str), round(mm, 1)))
+        return sorted(days)
+
     async def _get_temperature_summary(self, geometry) -> TemperatureSummary:
         today = datetime.now(timezone.utc).date()
         start = today - timedelta(days=LST_LOOKBACK_DAYS)
