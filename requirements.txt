@@ -67,10 +67,18 @@
 #   alembic                       – Async database migrations (backend/alembic/)
 #   httpx / requests              – HTTP clients for external API integrations
 #   apscheduler                   – Nightly jobs (satellite, environment, mandi prices + forecasts)
-#   tenacity                      – Retries for flaky external APIs (mandi price providers)
+#   tenacity                      – Retries for flaky external APIs (mandi prices, Open-Meteo, NewsAPI)
 #   numpy / pandas                – Mandi price time series (lags, rolling windows)
 #   scikit-learn / lightgbm       – Price forecast models (ridge, random forest, gradient-boosted trees)
 #   joblib                        – Trained model artifacts (PRICE_MODEL_DIR)
+#   google-genai                  – Gemini calls for the KrishiBot AI advisor (GEMINI_API_KEYS)
+#
+# External services used by the backend (keys go in the root .env):
+#   Google Earth Engine          – satellite analysis (GEE_PROJECT_ID + gcloud ADC login)
+#   Open-Meteo                   – weather forecast + history (no key)
+#   Agmarknet / CEDA / data.gov  – mandi prices (Agmarknet needs no key)
+#   Gemini                       – KrishiBot AI (GEMINI_API_KEYS)
+#   NewsAPI.org                  – News page (NEWS_API_KEY, free at newsapi.org/register)
 #
 # The Market page's sell-now / hold-N-days suggestion
 # (app/services/market_prices/price_service.py) needs no extra package: it

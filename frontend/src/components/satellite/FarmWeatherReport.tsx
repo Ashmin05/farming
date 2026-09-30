@@ -13,8 +13,8 @@
 import { useState } from "react";
 import {
   Cloud, CloudRain, CloudLightning, Sun, CloudSun, CloudDrizzle,
-  Wind, Droplets, Thermometer, AlertTriangle, ShieldAlert,
-  Calendar, SunMedium, type LucideIcon
+  Wind, Droplets, Thermometer,
+  Calendar, SunMedium,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -79,37 +79,6 @@ function WeatherIcon({ type, className }: { type: string; className?: string }) 
       return <Cloud className={className || "w-6 h-6 text-slate-400"} />;
   }
 }
-
-const severityConfig: Record<WeatherSeverity, { bg: string; border: string; text: string; badge: string; icon: LucideIcon }> = {
-  critical: {
-    bg: "bg-red-50",
-    border: "border-red-200",
-    text: "text-red-900",
-    badge: "bg-red-600 text-white",
-    icon: ShieldAlert,
-  },
-  high: {
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    text: "text-amber-900",
-    badge: "bg-amber-600 text-white",
-    icon: AlertTriangle,
-  },
-  moderate: {
-    bg: "bg-yellow-50",
-    border: "border-yellow-200",
-    text: "text-yellow-900",
-    badge: "bg-yellow-600 text-white",
-    icon: AlertTriangle,
-  },
-  info: {
-    bg: "bg-blue-50",
-    border: "border-blue-200",
-    text: "text-blue-900",
-    badge: "bg-blue-600 text-white",
-    icon: AlertTriangle,
-  },
-};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -228,52 +197,6 @@ export default function FarmWeatherReport({
 
           </div>
         </div>
-
-        {/* ── Active Weather Alerts ── */}
-        {weather.alerts && weather.alerts.length > 0 && (
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-bold text-farm-muted uppercase tracking-wider flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-                Active Alerts for this Field
-              </h4>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                {weather.alerts.length} Advisory {weather.alerts.length === 1 ? "" : "Actions"}
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              {weather.alerts.map((alert) => {
-                const conf = severityConfig[alert.severity] || severityConfig.moderate;
-                const IconComponent = conf.icon;
-                return (
-                  <div
-                    key={alert.id}
-                    className={`p-4 rounded-xl border ${conf.bg} ${conf.border} transition-all`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-2.5">
-                        <IconComponent className={`w-5 h-5 mt-0.5 flex-shrink-0 ${conf.text}`} />
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-sm text-farm-dark">{alert.headline}</span>
-                            <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md ${conf.badge}`}>
-                              {alert.severity}
-                            </span>
-                            <span className="text-xs text-farm-muted">· {alert.timeframe}</span>
-                          </div>
-                          <p className={`text-xs mt-1.5 leading-relaxed font-medium ${conf.text}`}>
-                            💡 <span className="font-bold">Agronomic Action:</span> {alert.actionAdvice}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* ── 10-Day Forecast ── */}
         <div>

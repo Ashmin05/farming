@@ -6,7 +6,7 @@ import { useState } from "react";
 import {
   LayoutDashboard, Map, Satellite, IndianRupee,
   Brain, HelpCircle, LogOut, ChevronRight, Menu, X,
-  UserCircle
+  UserCircle, Newspaper
 } from "lucide-react";
 
 import { useUserStore } from "@/lib/stores/farmStore";
@@ -17,6 +17,7 @@ const nav = [
   { href: "/farms", icon: Map, label: "My Farms" },
   { href: "/satellite", icon: Satellite, label: "Satellite" },
   { href: "/market", icon: IndianRupee, label: "Market" },
+  { href: "/news", icon: Newspaper, label: "News" },
   { href: "/ai-chat", icon: Brain, label: "KrishiBot AI" },
   { href: "/profile", icon: UserCircle, label: "Profile" },
   { href: "/help", icon: HelpCircle, label: "Help" },

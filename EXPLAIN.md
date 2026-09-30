@@ -109,6 +109,12 @@ what's pushed to origin and described by this document. Notable merged work, rou
   balance per farm (CHIRPS/Open-Meteo history + forecast, NDVI-adjustable Kc, soil-texture-derived
   available water), with a farmer irrigation log and a "next irrigation date + depth" endpoint
   (§5.18). Backend-only so far, same as §5.6 before §5.7 existed.
+- `ai-advisor` / `real-data-cleanup` — KrishiBot, a Gemini-backed advisor grounded in the farm's own
+  data, with a key/model fallback chain and a scripted fallback reply (§5.19).
+- Farmer news (uncommitted, on `main`'s working tree) — a News page in the sidebar showing
+  weather/agriculture/farming news from NewsAPI.org, with articles about the farm's district/state
+  ranked first (§5.20). Same change set removed the "Active Alerts for this Field" block from the
+  weather report card (§5.17) and reworded the KrishiBot widget's welcome text.
 
 ---
 
@@ -167,13 +173,14 @@ per the project's own convention (documented in each `page.tsx`).
 | Satellite Analysis | `/satellite` | `SatellitePage.tsx` |
 | Market | `/market` | `MarketPage.tsx`: live mandi prices, 90-day + 30-day forecast chart, sell-or-hold suggestion, nearby mandis (§5.14, §5.15) |
 | Weather & Alerts | `/weather` | `WeatherPage.tsx` — still exists, but no longer linked from the sidebar (removed as a redundant nav item; still reachable by direct URL) |
+| News | `/news` | `NewsPage.tsx` — weather/agriculture news for the selected farm's district/state (§5.20) |
 | KrishiBot AI chat | `/ai-chat` | `AiChatPage.tsx` — now requires sign-in (§6.8) |
 | Profile | `/profile` | `ProfilePage.tsx` |
 | Features | `/features` | `FeaturesPage.tsx` |
 | Help Center | `/help` | `HelpPage.tsx` |
 
 `AppLayout.tsx` provides the shared sidebar/nav shell for the logged-in app pages (Dashboard,
-Farms, Satellite, Market, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
+Farms, Satellite, Market, News, AI chat, Profile, Help — Weather is intentionally left off the sidebar, see
 above). Login/Register/Home are standalone, full-page layouts using the public `Navbar.tsx`
 (Home) or their own minimal header (Login/Register) — Login/Register also have their own
 glassmorphism background (§4.4).
@@ -304,6 +311,7 @@ backend/
 │   │   ├── environment.py  # pydantic request/response models for /farms/{id}/environment (§5.11)
 │   │   ├── weather.py      # pydantic request/response models for /farms/{id}/weather (§5.17)
 │   │   ├── irrigation.py   # pydantic request/response models for /farms/{id}/irrigation(/log) (§5.18)
+│   │   ├── news.py         # pydantic response models for /farms/{id}/news (§5.20)
 │   │   └── market_prices.py  # pydantic response models for /market-prices/* (§5.14)
 │   ├── repositories/
 │   │   ├── user_repository.py   # DB queries for User (data-access layer)
@@ -322,6 +330,8 @@ backend/
 │   │   ├── google_auth.py       # verifies Google "Sign in with Google" ID tokens
 │   │   ├── earth_engine_client.py  # Google Earth Engine SDK wrapper (§5.5, §5.6, §5.9, §5.10, §5.11, §5.18)
 │   │   ├── open_meteo_client.py # Open-Meteo forecast + historical-archive client, key-free (§5.17, §5.18)
+│   │   ├── gemini_client.py     # Google GenAI client with key/model fallback for KrishiBot (§5.19)
+│   │   ├── news_client.py       # NewsAPI.org client, in-memory per-location cache (§5.20)
 │   │   └── market_prices/       # mandi price providers behind one interface (§5.14)
 │   │       ├── base.py          #   PriceDataProvider, NormalizedMarketPrice, catalogue types
 │   │       ├── agmarknet.py     #   Agmarknet 2.0 (primary)
@@ -335,6 +345,8 @@ backend/
 │   │   ├── satellite_service.py # business logic: analysis, timeseries, alerts, map layers, environment
 │   │   ├── weather_service.py   # business logic: cached Open-Meteo forecast + flags (§5.17)
 │   │   ├── irrigation_service.py # business logic: FAO-56 water balance + irrigation log (§5.18)
+│   │   ├── advisor_service.py   # business logic: KrishiBot context gathering + Gemini/scripted reply (§5.19)
+│   │   ├── news_service.py      # business logic: farm district/state -> news feed (§5.20)
 │   │   └── market_prices/       # mandi price pipeline (§5.14): validation, catalog (sync +
 │   │                            # resolver), ingestion, backfill, analytics, quality, nearby,
 │   │                            # watchlist, queries (API read side)
@@ -346,6 +358,8 @@ backend/
 │   │   ├── alerts.py      # GET /farms/{id}/alerts, PATCH /alerts/{id}/read (§5.9)
 │   │   ├── weather.py     # GET /farms/{id}/weather (§5.17)
 │   │   ├── irrigation.py  # GET /farms/{id}/irrigation, POST /farms/{id}/irrigation/log (§5.18)
+│   │   ├── assistant.py   # POST /farms/{id}/ask — KrishiBot (§5.19)
+│   │   ├── news.py        # GET /farms/{id}/news (§5.20)
 │   │   └── market_prices.py  # GET /market-prices/*, GET /farms/{id}/market-prices, GET /farms/{id}/market/forecast (§5.14, §5.15)
 │   ├── jobs/
 │   │   ├── scheduler.py   # APScheduler jobs: timeseries+alerts (§5.9), environment (§5.11), mandi prices (§5.14)
@@ -392,6 +406,8 @@ Earth Engine, the mandi price sources) behind a small interface the rest of the 
 | GET | `/farms/{farm_id}/weather` | 10-day Open-Meteo forecast for the farm's centroid (temperature, precipitation, wind, humidity, UV, ET0) with heavy-rain/heat-stress/good-spray-window flags per day, cached 3h; never 404s — the first call fetches live (§5.17) |
 | GET | `/farms/{farm_id}/irrigation` | FAO-56 root-zone water balance: current depletion vs. readily available water, and the next modelled irrigation date + depth (mm); never 404s — the first call computes a plan from scratch (§5.18) |
 | POST | `/farms/{farm_id}/irrigation/log` | Record a farmer-reported irrigation event (date + depth mm), returns the recomputed plan (§5.18) |
+| POST | `/farms/{farm_id}/ask` | KrishiBot: answer a question from this farm's own data (Gemini, or a scripted fallback); 429 when rate-limited (§5.19) |
+| GET | `/farms/{farm_id}/news` | Up to 20 recent weather/agriculture/farming articles (NewsAPI.org), those naming the farm's district/state first, cached 30 min; an empty `is_configured: false` feed (not an error) without `NEWS_API_KEY` (§5.20) |
 | GET | `/market-prices/commodities`, `/locations`, `/markets` | Mandi catalogue with stored prices: commodities, states + districts, markets (with coordinates if known) (§5.14) |
 | GET | `/market-prices/latest?commodity=&state=&district=` | Each market's latest price with its precomputed analytics + `provenance` {sources, as_of, is_stale, last ingestion run} (§5.14) |
 | GET | `/market-prices?commodity=&from=&to=&page=` | Individual stored reports (variety/grade level), paginated (§5.14) |
@@ -1277,6 +1293,13 @@ real backend behind it, the same live/demo split as satellite and environment:
   exercised by the unit tests but wasn't separately smoke-tested end-to-end in a browser this round
   — local account registration in this dev environment hung on the database call, an environment
   issue unrelated to this feature's code.
+- **Later change — "Active Alerts for this Field" removed from the UI.** `FarmWeatherReport.tsx`
+  (used on the Dashboard and `/weather`) no longer renders the per-field advisory cards (e.g. "Good
+  spray window today · Agronomic Action: …"); the card now goes straight from "Today at your farm"
+  to the 7-day forecast strip. Only the rendering and its now-unused `severityConfig`/icon imports
+  were deleted — the backend still returns the per-day flags, and the `FarmWeatherAlert` /
+  `WeatherSeverity` types and `FarmDetailedWeather.alerts` field stay in place since `farmStore.ts`
+  and `weather-client.ts` still use them.
 
 ### 5.18 Irrigation recommendation — FAO-56 water balance (`irrigation` branch)
 
@@ -1455,6 +1478,44 @@ that farm's already-computed data — never general agronomy knowledge, never an
   question is answered independently, previous turns aren't included as context); rate limiting is
   in-memory only, so it resets on every backend restart and isn't shared across multiple worker
   processes if this ever moves beyond a single-process deployment.
+
+### 5.20 Farmer news feed (NewsAPI.org)
+
+A dedicated **News** page (`/news`, in the sidebar between Market and KrishiBot AI) listing recent
+weather, agriculture and farming news for a farm's area. It replaces nothing on the Dashboard — the
+old Dashboard "Agri News" cards were removed earlier as fake data (§9), and news deliberately lives
+on its own page, not the Dashboard.
+
+- **`app/integrations/news_client.py`** — an `httpx` client for NewsAPI.org's `/v2/everything`,
+  with the same `tenacity` retry rules as `open_meteo_client.py` (network errors, 429, 5xx; 3
+  attempts). It requests 60 articles, newest first, English only.
+- **Keeping it on-topic**: the search uses `qInTitle` (title match only) with a fixed list of terms
+  — agriculture, farming, farmer(s), crop(s), irrigation, monsoon, rainfall, drought, harvest,
+  sowing, mandi, and the quoted phrases "crop prices", "weather forecast", "crop damage", "farm
+  produce". Title-only matching drops articles that just mention "farmer" in passing (e.g.
+  election coverage). The phrases must stay quoted: unquoted, NewsAPI splits them into single words
+  and "forecast" alone matched GDP and election forecasts.
+- **Location is a ranking, not a filter.** Testing showed NewsAPI treats `q` + `qInTitle` as OR,
+  not AND as its docs say, so the location can't go into the same request. Instead,
+  `_rank_by_location()` moves articles whose title/description mention the farm's district or state
+  to the top, keeping everything else below. Filtering by location would often leave the feed empty.
+  The top 20 are returned.
+- **Caching**: an in-memory cache per location string, `NEWS_CACHE_MINUTES` (30) long, so the free
+  tier's daily request cap isn't burned by page views. If a refetch fails, an expired cache entry is
+  served instead. Like KrishiBot's rate limiter (§5.19), it's per process and resets on restart.
+- **`NewsService.get_farm_news(farm)`** builds the location from `farm.district` + `farm.state`.
+  With no `NEWS_API_KEY` or no location it returns an empty feed with `is_configured: false` rather
+  than an error; a live NewsAPI failure becomes `NewsServiceError` → 503.
+- **`GET /farms/{id}/news`** (`app/routers/news.py`) — same ownership check and 404-never-403
+  behaviour as other `/farms/{id}/...` routes. No database table.
+- **Frontend**: `lib/api/news-client.ts` + `lib/hooks/useFarmNews.ts` (React Query, `staleTime` 30
+  min to match the backend cache, `isRealFarmId`-gated like the weather hook). `views/NewsPage.tsx`
+  has a farm selector (same as `WeatherPage.tsx`) and article cards (image, title, description,
+  source, "3h ago", opens the original in a new tab), plus states for no farm, loading, error with
+  retry, key not configured, and no articles. Guests/demo farms get the "register a farm" prompt —
+  there's no demo news.
+- **Verified live** with the real key: results were drought, monsoon crop-loss, crop-damage
+  compensation and similar stories. No automated tests yet (same as the other external-API clients).
 
 ---
 
@@ -1676,6 +1737,9 @@ Defined in `.env.example` at the repo root. Copy it to `.env` (backend, root-lev
 | `GEMINI_MODEL` | Backend | Gemini model id used for `POST /farms/{id}/ask` (default `gemini-3.6-flash` — Google retired `gemini-2.5-flash` for new API keys) |
 | `GEMINI_FALLBACK_MODELS` | Backend | Comma-separated models tried, with every key, when `GEMINI_MODEL` is overloaded, retired or out of quota (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`) |
 | `ADVISOR_RATE_LIMIT_PER_HOUR` | Backend | Per-user cap on `POST /farms/{id}/ask` (default `20`) — in-memory, resets on restart (§5.19) |
+| `NEWS_API_KEY` | Backend | NewsAPI.org key for the News page (§5.20), free at https://newsapi.org/register. Blank = the page shows a "not configured" state instead of erroring. Backend only |
+| `NEWS_API_BASE_URL` | Backend | Default `https://newsapi.org/v2` |
+| `NEWS_CACHE_MINUTES` | Backend | How long one location's articles are reused before refetching (default `30`, in-memory) |
 
 ---
 
@@ -1774,11 +1838,13 @@ npm run dev    # http://localhost:3000
 | Mandi prices, trends, nearby mandis | ✅ Real, from Agmarknet 2.0 (§5.14). Nightly ingestion, 2021–2026 West Bengal history (456k reports), precomputed analytics. The `/market` page and the Dashboard's mandi card read them. Data is loaded for West Bengal plus the states/crops of registered farms. The crop selector is capped at five crops app-wide (Rice, Wheat, Onion, Sugarcane, Potato, §5.16); Sugarcane has no real mandi data anywhere (mills buy it directly, not via APMC auctions) and honestly says so instead of faking a number |
 | Mandi price forecasts | ✅ Real estimates (§5.14). 7/14/30-day, chosen by chronological validation against baselines, with expected range and validation error shown. Labelled estimates, never guaranteed |
 | Sell-now / hold-N-days suggestion | ✅ Real, derived (§5.15). Computed from stored prices and forecasts; the holding cost is a configured assumption and is labelled as one. Only for crops/states with a trained model (West Bengal today) |
-| Dashboard "Agri News" cards / Smart Suggestion / Harvest Estimation / weather "Field Advisory" | ❌ Removed — all were sample/generated text, not real data. The public `/weather` page (was a hard-coded forecast) now shows the signed-in user's live farm forecast, or a sign-in prompt; `/features`, `/help`, the home page and the footer were cut back to features that actually exist |
+| Farmer news | ✅ Real for real farms — `/news` page over `GET /farms/{id}/news` (NewsAPI.org), weather/agriculture/farming articles with the farm's district/state first; see §5.20 |
+| Weather "Active Alerts for this Field" cards | ❌ Removed from the UI (§5.17) — the forecast itself is unchanged |
+| Dashboard "Agri News" cards / Smart Suggestion / Harvest Estimation / weather "Field Advisory" | ❌ Removed — all were sample/generated text, not real data (real news now lives on its own `/news` page, §5.20). The public `/weather` page (was a hard-coded forecast) now shows the signed-in user's live farm forecast, or a sign-in prompt; `/features`, `/help`, the home page and the footer were cut back to features that actually exist |
 | Farm state/district | ✅ Real — reverse-geocoded (Mapbox) from the drawn boundary's centroid when a farm is registered. Previously hard-coded to "Maharashtra", which sent mandi-price lookups to the wrong state |
 | Irrigation recommendation | ✅ Real — `GET /farms/{id}/irrigation` computes a FAO-56 root-zone water balance (depletion vs. readily available water) from CHIRPS/Open-Meteo history + forecast, soil texture, and optionally NDVI; `POST .../irrigation/log` records farmer irrigation; see §5.18. Wired into the **Dashboard's** Canopy Moisture card for real farms (`useFarmIrrigation`, `SourceBadge`); the **Satellite page's** irrigation card and the log-entry UI still show/use `farmStore.ts`'s synthetic data |
 | Fields / Yield data | ❌ Mock only — `farmStore.ts` localStorage demo data (guests) or synthetic per-farm data (signed-in, see above); no backend endpoints exist yet |
-| KrishiBot AI chat responses | ❌ Mock only — via `mock-client.ts` (auth gate is real, the replies aren't) |
+| KrishiBot AI chat responses | ✅ Real for real farms — `POST /farms/{id}/ask`, Gemini grounded in the farm's data, scripted fallback when Gemini is unavailable (§5.19); guests/demo farms still get the mock replies |
 | Forgot / reset password | ❌ Removed — was built, then deleted for lack of real email delivery; see §6.6 |
 | "Remember me" checkbox on login | ❌ Removed — was UI-only and never did anything |
 

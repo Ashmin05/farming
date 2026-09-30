@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     SATELLITE_API_KEY: str | None = None
     AI_API_KEY: str | None = None
 
+    # NewsAPI.org key for the farmer news feed (app/integrations/news_client.py).
+    # Free tier: https://newsapi.org/register. Blank means "not configured" --
+    # NewsService then returns a clean empty feed instead of erroring.
+    NEWS_API_KEY: str | None = None
+    NEWS_API_BASE_URL: str = "https://newsapi.org/v2"
+    # How long a location's fetched articles are reused before refetching
+    # (in-memory, per process -- see app/integrations/news_client.py).
+    NEWS_CACHE_MINUTES: int = 30
+
     # Gemini (Google GenAI) API keys for the AI Advisor / KrishiBot
     # (app/integrations/gemini_client.py, app/services/advisor_service.py).
     # Comma-separated so a quota/auth error on one key falls through to the

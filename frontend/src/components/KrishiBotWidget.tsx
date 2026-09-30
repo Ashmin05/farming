@@ -19,7 +19,8 @@ import { useKrishiBot, type KrishiBotMessage } from "@/lib/hooks/useKrishiBot";
 const WELCOME: KrishiBotMessage = {
   id: "welcome",
   role: "assistant",
-  content: "Namaste! 🌾 I'm KrishiBot AI. Ask me about crop health, irrigation, pests, or market prices.",
+  content:
+    "Namaste! 🌾 I'm KrishiBot, your AI farming assistant. Ask about your farm's satellite crop health, irrigation timing, weather, or mandi prices.",
   timestamp: new Date().toISOString(),
 };
 
@@ -89,7 +90,7 @@ export default function KrishiBotWidget() {
             </div>
             <p className="text-sm font-bold text-farm-dark">Sign in to chat with KrishiBot AI</p>
             <p className="text-xs text-farm-muted">
-              Create a free account or sign in to ask about your crop health, irrigation, pests, and market prices.
+              Create a free account or sign in to ask about your crop health, irrigation, weather, and mandi prices.
             </p>
             <div className="flex gap-2 w-full mt-1">
               <Link
